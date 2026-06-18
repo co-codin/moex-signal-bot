@@ -36,6 +36,9 @@ class MoexProvider:
     async def alerts(self, ticker: str, start: str, end: str) -> list[dict]:
         return await self._ticker_rows(ticker, "alerts", start, end)
 
+    async def futoi(self, ticker: str, start: str, end: str) -> list[dict]:
+        return await self._ticker_rows(ticker, "futoi", start, end)
+
     async def quote(self, ticker: str) -> dict:
         ticker = ticker.upper()
 

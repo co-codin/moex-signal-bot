@@ -16,6 +16,15 @@ class WatchItem:
     last_checked_at: dt.datetime | None
 
 
+@dataclass(frozen=True)
+class ChatSettings:
+    chat_id: int
+    min_score: int = 60
+    quiet_start: str | None = None
+    quiet_end: str | None = None
+    alert_types: tuple[str, ...] = ()
+
+
 class WatchlistStore:
     def __init__(self, path: str | Path) -> None:
         self.path = str(path)
@@ -137,6 +146,115 @@ class WatchlistStore:
                 (chat_id, ticker.upper(), signal_code, signal_key, _dump_datetime(sent_at)),
             )
 
+    def get_settings(self, chat_id: int) -> ChatSettings:
+        row = self._conn.execute(
+            """
+            SELECT chat_id, min_score, quiet_start, quiet_end, alert_types
+            FROM chat_settings
+            WHERE chat_id = ?
+            """,
+            (chat_id,),
+        ).fetchone()
+        if row is None:
+            return ChatSettings(chat_id=chat_id)
+        return ChatSettings(
+            chat_id=int(row["chat_id"]),
+            min_score=int(row["min_score"]),
+            quiet_start=row["quiet_start"],
+            quiet_end=row["quiet_end"],
+            alert_types=_load_alert_types(row["alert_types"]),
+        )
+
+    def set_min_score(self, chat_id: int, min_score: int) -> None:
+        min_score = max(0, min(100, int(min_score)))
+        settings = self.get_settings(chat_id)
+        with self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO chat_settings(chat_id, min_score, quiet_start, quiet_end, alert_types)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(chat_id)
+                DO UPDATE SET min_score = excluded.min_score
+                """,
+                (
+                    chat_id,
+                    min_score,
+                    settings.quiet_start,
+                    settings.quiet_end,
+                    _dump_alert_types(settings.alert_types),
+                ),
+            )
+
+    def set_quiet_hours(self, chat_id: int, quiet_start: str | None, quiet_end: str | None) -> None:
+        quiet_start = _normalize_time_value(quiet_start) if quiet_start else None
+        quiet_end = _normalize_time_value(quiet_end) if quiet_end else None
+        settings = self.get_settings(chat_id)
+        with self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO chat_settings(chat_id, min_score, quiet_start, quiet_end, alert_types)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(chat_id)
+                DO UPDATE SET quiet_start = excluded.quiet_start,
+                              quiet_end = excluded.quiet_end
+                """,
+                (
+                    chat_id,
+                    settings.min_score,
+                    quiet_start,
+                    quiet_end,
+                    _dump_alert_types(settings.alert_types),
+                ),
+            )
+
+    def set_alert_types(self, chat_id: int, alert_types: tuple[str, ...]) -> None:
+        normalized = tuple(sorted({item.lower() for item in alert_types if item.strip()}))
+        settings = self.get_settings(chat_id)
+        with self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO chat_settings(chat_id, min_score, quiet_start, quiet_end, alert_types)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(chat_id)
+                DO UPDATE SET alert_types = excluded.alert_types
+                """,
+                (chat_id, settings.min_score, settings.quiet_start, settings.quiet_end, _dump_alert_types(normalized)),
+            )
+
+    def add_portfolio_ticker(self, chat_id: int, ticker: str, *, now: dt.datetime | None = None) -> None:
+        now = _normalize_datetime(now)
+        with self._conn:
+            self._conn.execute(
+                """
+                INSERT OR IGNORE INTO portfolio(chat_id, ticker, created_at)
+                VALUES (?, ?, ?)
+                """,
+                (chat_id, ticker.upper(), _dump_datetime(now)),
+            )
+
+    def remove_portfolio_ticker(self, chat_id: int, ticker: str) -> bool:
+        with self._conn:
+            cursor = self._conn.execute(
+                """
+                DELETE FROM portfolio
+                WHERE chat_id = ? AND ticker = ?
+                """,
+                (chat_id, ticker.upper()),
+            )
+        return cursor.rowcount > 0
+
+    def list_portfolio(self, chat_id: int) -> list[str]:
+        rows = self._conn.execute(
+            """
+            SELECT ticker
+            FROM portfolio
+            WHERE chat_id = ?
+            ORDER BY created_at, ticker
+            """,
+            (chat_id,),
+        ).fetchall()
+        return [str(row["ticker"]) for row in rows]
+
     def _create_schema(self) -> None:
         with self._conn:
             self._conn.execute(
@@ -148,6 +266,27 @@ class WatchlistStore:
                     muted_until TEXT,
                     created_at TEXT NOT NULL,
                     last_checked_at TEXT,
+                    PRIMARY KEY(chat_id, ticker)
+                )
+                """
+            )
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS chat_settings (
+                    chat_id INTEGER PRIMARY KEY,
+                    min_score INTEGER NOT NULL DEFAULT 60,
+                    quiet_start TEXT,
+                    quiet_end TEXT,
+                    alert_types TEXT NOT NULL DEFAULT ''
+                )
+                """
+            )
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS portfolio (
+                    chat_id INTEGER NOT NULL,
+                    ticker TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
                     PRIMARY KEY(chat_id, ticker)
                 )
                 """
@@ -200,3 +339,18 @@ def _load_datetime(value: str | None) -> dt.datetime | None:
         return None
     parsed = dt.datetime.fromisoformat(value)
     return _normalize_datetime(parsed)
+
+
+def _dump_alert_types(values: tuple[str, ...]) -> str:
+    return ",".join(values)
+
+
+def _load_alert_types(value: str | None) -> tuple[str, ...]:
+    if not value:
+        return ()
+    return tuple(item for item in value.split(",") if item)
+
+
+def _normalize_time_value(value: str) -> str:
+    parsed = dt.time.fromisoformat(value)
+    return parsed.strftime("%H:%M")

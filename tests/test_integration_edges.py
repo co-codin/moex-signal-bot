@@ -51,6 +51,28 @@ def test_moex_provider_sets_token_and_fetches_native_tradestats():
     assert rows == [{"ticker": "ROSN", "val_b": 10, "val_s": 20}]
 
 
+def test_moex_provider_fetches_native_futoi_rows():
+    class FakeSession:
+        TOKEN = None
+
+    class FakeTicker:
+        def __init__(self, ticker):
+            self.ticker = ticker
+
+        def futoi(self, *, start, end, native):
+            assert self.ticker == "SBERF"
+            assert start == "2026-06-18"
+            assert end == "2026-06-18"
+            assert native is True
+            return [{"ticker": self.ticker, "pos_long": 100, "pos_short": 80}]
+
+    provider = MoexProvider(api_key=None, ticker_factory=FakeTicker, session_module=FakeSession)
+
+    rows = asyncio.run(provider.futoi("sberf", "2026-06-18", "2026-06-18"))
+
+    assert rows == [{"ticker": "SBERF", "pos_long": 100, "pos_short": 80}]
+
+
 def test_telegram_client_posts_send_message_payload():
     class FakeResponse:
         def raise_for_status(self):

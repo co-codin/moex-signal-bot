@@ -2,7 +2,7 @@
 
 Русскоязычный Telegram-бот для анализа российских акций на MOEX по данным `moexalgo` и ALGOPACK.
 
-Бот показывает котировки, покупательную и продавцовую силу, состояние стакана, давление заявок, события MegaAlert и скоринговые торговые сигналы. Также есть автоматический сканер: пользователь добавляет тикеры в watchlist, а бот сам отправляет сильные новые сигналы с дедупликацией.
+Бот показывает котировки, покупательную и продавцовую силу, состояние стакана, давление заявок, события MegaAlert и скоринговые торговые сигналы. Также есть MOEX Flow Pro: автоматический Scanner Pro, расширенные настройки watchlist, FUTOI по фьючерсам, тепловая карта, портфельный риск, дайджест, простая статистика похожих состояний и короткий формат сигнала для Telegram-каналов.
 
 Сигналы являются аналитикой по данным, а не инвестиционной рекомендацией.
 
@@ -15,6 +15,11 @@
 - Анализ `MegaAlert`: аномальные события ALGOPACK.
 - Скоринговые сигналы по нескольким источникам данных.
 - Watchlist и автоматический сканер с хранением в SQLite.
+- Настройки автосканера: минимальный score, тихие часы и фильтр типов сигналов.
+- Тепловая карта по тикерам и краткий рыночный дайджест.
+- FUTOI по фьючерсам MOEX.
+- Портфельный мониторинг риска.
+- Канальный формат `MOEX Flow Alert`.
 - Дедупликация автосигналов, чтобы не спамить пользователя одинаковыми событиями.
 - Docker-образ для запуска сервиса.
 - Ruff и pre-commit для проверки качества кода.
@@ -33,10 +38,24 @@
 | `/book ROSN` | Краткий статус стакана по `OBStats`. |
 | `/orders ROSN` | Давление выставленных и снятых заявок по `OrderStats`. |
 | `/alerts ROSN` | Сводка событий `MegaAlert`. |
+| `/heatmap ROSN SBER LKOH` | Тепловая карта по силе сигнала, потоку и MegaAlert. |
+| `/mega ROSN` | Расширенная лента MegaAlert по одному или нескольким тикерам. |
+| `/digest ROSN SBER` | Краткий дайджест главных сигналов. |
+| `/stats ROSN 30` | Историческая статистика похожих состояний по `TradeStats`. |
 | `/watch ROSN 15m` | Добавить тикер в автоматический сканер с интервалом 15 минут. |
 | `/unwatch ROSN` | Удалить тикер из автоматического сканера. |
 | `/watchlist` | Показать тикеры автосканера. |
 | `/mute ROSN 60` | Поставить автосигналы по тикеру на паузу на 60 минут. |
+| `/settings` | Показать настройки Scanner Pro. |
+| `/score 70` | Минимальная сила автосигнала для чата. |
+| `/quiet 23:00 07:00` | Тихие часы без автосигналов. |
+| `/types sell_pressure absorption` | Фильтр типов автосигналов. |
+| `/futoi SBERF` | Открытый интерес по фьючерсу через FUTOI. |
+| `/portfolio_add ROSN` | Добавить тикер в портфель. |
+| `/portfolio_remove ROSN` | Удалить тикер из портфеля. |
+| `/portfolio` | Показать портфель. |
+| `/portfolio_risk` | Проверить риск по портфелю. |
+| `/channel_signal ROSN` | Короткий сигнал для публикации в Telegram-канале. |
 
 Тикеры нормализуются в верхний регистр. По умолчанию бот рассчитан на рынок акций MOEX TQBR.
 
@@ -78,6 +97,18 @@ imbalance = (val_b - val_s) / (val_b + val_s)
 - сигнал достаточно сильный;
 - такой сигнал еще не отправлялся этому чату;
 - тикер не находится на паузе после `/mute`.
+- текущее время не попадает в тихие часы `/quiet`;
+- тип сигнала проходит фильтр `/types`, если фильтр задан.
+
+Типы сигналов Scanner Pro:
+
+- `sell_pressure`: продавцы контролируют поток.
+- `absorption`: цена снижается, но покупатели активно забирают продажи.
+- `bullish_reversal`: рост цены подтвержден покупательным потоком.
+- `weak_bounce`: отскок без сильного подтверждения покупателями.
+- `breakdown`: продавцовый сигнал с новыми минимумами или сильным снижением.
+- `reclaim`: возврат контроля или движение к покупателям.
+- `megaalert_cluster`: несколько аномальных событий MegaAlert.
 
 ## Переменные окружения
 
@@ -88,6 +119,7 @@ TELEGRAM_BOT_TOKEN=
 MOEX_API_KEY=
 MOEX_SIGNAL_DB=signals.sqlite3
 SCANNER_INTERVAL_SECONDS=60
+DEFAULT_SCAN_TICKERS=ROSN SBER GAZP LKOH TATN TATNP
 ```
 
 Можно использовать `MOEXALGO_API_KEY` вместо `MOEX_API_KEY`.
@@ -98,6 +130,7 @@ SCANNER_INTERVAL_SECONDS=60
 - `MOEX_API_KEY`: API-ключ MOEX/ALGOPACK для `moexalgo`.
 - `MOEX_SIGNAL_DB`: путь к SQLite базе watchlist и дедупликации.
 - `SCANNER_INTERVAL_SECONDS`: частота фонового цикла автосканера.
+- `DEFAULT_SCAN_TICKERS`: тикеры для `/heatmap`, `/mega` и `/digest`, если пользователь не указал список.
 
 Не коммитьте реальные токены, JWT, `.env`, SQLite базы и пользовательские данные.
 
@@ -117,6 +150,8 @@ python -m moex_signal_bot --dry-run "/help"
 python -m moex_signal_bot --dry-run "/flow ROSN 7"
 python -m moex_signal_bot --dry-run "/signal ROSN"
 python -m moex_signal_bot --dry-run "/scan ROSN SBER"
+python -m moex_signal_bot --dry-run "/heatmap ROSN SBER"
+python -m moex_signal_bot --dry-run "/futoi SBERF"
 ```
 
 Если используется локальный checkout `moexalgo`, можно добавить его в `PYTHONPATH`:
@@ -170,6 +205,9 @@ src/moex_signal_bot/
   moex_provider.py    # адаптер moexalgo
   signals.py          # базовые модели и классификация
   scanner.py          # скоринг и автоматический сканер
+  analytics.py        # heatmap, MegaAlert feed, digest и статистика
+  futoi.py            # агрегация открытого интереса FUTOI
+  portfolio.py        # риск портфеля
   storage.py          # SQLite watchlist и дедупликация
   formatters.py       # русские текстовые отчеты
   telegram_client.py  # Telegram Bot API client

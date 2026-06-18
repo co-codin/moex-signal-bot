@@ -52,6 +52,7 @@ def build_signal_report(
             state=neutral,
             score=0,
             direction="neutral",
+            alert_type="no_data",
             latest_date="",
             latest_time="",
             price_change=0.0,
@@ -93,6 +94,12 @@ def build_signal_report(
         state=state,
         score=score,
         direction=_direction_for_state(state),
+        alert_type=_alert_type_for(
+            state,
+            price_change=latest.price_change,
+            low_alerts=low_alerts,
+            high_alerts=high_alerts,
+        ),
         latest_date=latest.date,
         latest_time=latest.last_time,
         price_change=latest.price_change,
@@ -162,7 +169,15 @@ async def run_scan_once(
         if store.is_muted(item, now):
             store.mark_checked(item.chat_id, item.ticker, now)
             continue
-        if is_actionable(report, min_score=min_score) and not store.was_signal_sent(
+        settings = store.get_settings(item.chat_id)
+        threshold = max(min_score, settings.min_score)
+        if _is_quiet_time(settings.quiet_start, settings.quiet_end, now):
+            store.mark_checked(item.chat_id, item.ticker, now)
+            continue
+        if settings.alert_types and report.alert_type not in settings.alert_types:
+            store.mark_checked(item.chat_id, item.ticker, now)
+            continue
+        if is_actionable(report, min_score=threshold) and not store.was_signal_sent(
             item.chat_id, report.ticker, report.state.code, report.signal_key
         ):
             await telegram.send_message(item.chat_id, format_signal_report(report, automatic=True))
@@ -257,6 +272,22 @@ def _direction_for_state(state: TradeState) -> str:
     }.get(state.code, "neutral")
 
 
+def _alert_type_for(state: TradeState, *, price_change: float, low_alerts: int, high_alerts: int) -> str:
+    if low_alerts + high_alerts >= 3:
+        return "megaalert_cluster"
+    if state.code == "sell_pressure" and low_alerts:
+        return "breakdown"
+    if state.code == "bullish_reversal" and high_alerts:
+        return "reclaim"
+    if state.code in {"sell_pressure", "absorption", "bullish_reversal", "weak_bounce"}:
+        return state.code
+    if price_change <= -1.0:
+        return "breakdown"
+    if price_change >= 1.0:
+        return "reclaim"
+    return "neutral"
+
+
 def _unique_tickers(tickers: Iterable[str]) -> list[str]:
     result: list[str] = []
     seen: set[str] = set()
@@ -300,3 +331,14 @@ def _normalize_datetime(value: dt.datetime | None) -> dt.datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=dt.UTC)
     return value.astimezone(dt.UTC)
+
+
+def _is_quiet_time(quiet_start: str | None, quiet_end: str | None, now: dt.datetime) -> bool:
+    if not quiet_start or not quiet_end:
+        return False
+    start = dt.time.fromisoformat(quiet_start)
+    end = dt.time.fromisoformat(quiet_end)
+    current = now.timetz().replace(tzinfo=None)
+    if start <= end:
+        return start <= current < end
+    return current >= start or current < end

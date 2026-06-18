@@ -43,3 +43,34 @@ def test_watchlist_store_dedupes_sent_signals(tmp_path):
     store.mark_signal_sent(123, "ROSN", "sell_pressure", "2026-06-18T11:00", now)
 
     assert store.was_signal_sent(123, "ROSN", "sell_pressure", "2026-06-18T11:00") is True
+
+
+def test_store_persists_chat_settings(tmp_path):
+    store = WatchlistStore(tmp_path / "signals.sqlite3")
+    try:
+        store.set_min_score(42, 75)
+        store.set_quiet_hours(42, "23:00", "07:00")
+        store.set_alert_types(42, ("sell_pressure", "absorption"))
+
+        settings = store.get_settings(42)
+
+        assert settings.min_score == 75
+        assert settings.quiet_start == "23:00"
+        assert settings.quiet_end == "07:00"
+        assert settings.alert_types == ("absorption", "sell_pressure")
+    finally:
+        store.close()
+
+
+def test_store_persists_portfolio(tmp_path):
+    store = WatchlistStore(tmp_path / "signals.sqlite3")
+    try:
+        store.add_portfolio_ticker(42, "rosn")
+        store.add_portfolio_ticker(42, "SBER")
+
+        assert store.list_portfolio(42) == ["ROSN", "SBER"]
+        assert store.remove_portfolio_ticker(42, "ROSN") is True
+        assert store.remove_portfolio_ticker(42, "ROSN") is False
+        assert store.list_portfolio(42) == ["SBER"]
+    finally:
+        store.close()

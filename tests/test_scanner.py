@@ -40,6 +40,7 @@ def test_build_signal_report_scores_sell_pressure_from_multiple_sources():
     assert report.state.code == "sell_pressure"
     assert report.score >= 80
     assert report.direction == "short"
+    assert report.alert_type == "breakdown"
     assert report.support == 328
     assert "давление продаж" in " ".join(report.reasons).lower()
 
@@ -64,6 +65,7 @@ def test_build_signal_report_detects_absorption_when_buyers_hold_down_move():
 
     assert report.state.code == "absorption"
     assert report.direction == "watch_long"
+    assert report.alert_type == "absorption"
     assert report.score >= 55
 
 
@@ -113,3 +115,42 @@ def test_run_scan_once_sends_due_actionable_signals_once(tmp_path):
     assert len(telegram.sent) == 1
     assert telegram.sent[0][0] == 123
     assert "Автосигнал ROSN" in telegram.sent[0][1]
+
+
+def test_run_scan_once_respects_chat_min_score(tmp_path):
+    now = dt.datetime(2026, 6, 18, 11, 0, tzinfo=dt.UTC)
+    store = WatchlistStore(tmp_path / "signals.sqlite3")
+    store.add_watch(123, "rosn", interval_minutes=5, now=now)
+    store.set_min_score(123, 100)
+    telegram = FakeTelegram()
+
+    sent = asyncio.run(run_scan_once(FakeProvider(), store, telegram, now=now, today=dt.date(2026, 6, 18)))
+
+    assert sent == 0
+    assert telegram.sent == []
+
+
+def test_run_scan_once_respects_alert_type_filter(tmp_path):
+    now = dt.datetime(2026, 6, 18, 11, 0, tzinfo=dt.UTC)
+    store = WatchlistStore(tmp_path / "signals.sqlite3")
+    store.add_watch(123, "rosn", interval_minutes=5, now=now)
+    store.set_alert_types(123, ("absorption",))
+    telegram = FakeTelegram()
+
+    sent = asyncio.run(run_scan_once(FakeProvider(), store, telegram, now=now, today=dt.date(2026, 6, 18)))
+
+    assert sent == 0
+    assert telegram.sent == []
+
+
+def test_run_scan_once_respects_quiet_hours(tmp_path):
+    now = dt.datetime(2026, 6, 18, 21, 15, tzinfo=dt.UTC)
+    store = WatchlistStore(tmp_path / "signals.sqlite3")
+    store.add_watch(123, "rosn", interval_minutes=5, now=now)
+    store.set_quiet_hours(123, "21:00", "07:00")
+    telegram = FakeTelegram()
+
+    sent = asyncio.run(run_scan_once(FakeProvider(), store, telegram, now=now, today=dt.date(2026, 6, 18)))
+
+    assert sent == 0
+    assert telegram.sent == []

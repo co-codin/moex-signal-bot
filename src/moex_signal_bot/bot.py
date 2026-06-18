@@ -1,19 +1,32 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 from dataclasses import dataclass
 from typing import Protocol
 
+from .analytics import build_flow_statistics, build_heatmap, summarize_mega_alerts
 from .formatters import (
+    format_channel_signal,
+    format_digest,
     format_flow_report,
+    format_flow_statistics,
     format_full_report,
+    format_futoi_summary,
+    format_heatmap,
     format_help,
+    format_mega_alert_summaries,
+    format_portfolio,
+    format_portfolio_risk,
     format_quote_report,
     format_scan_results,
+    format_settings,
     format_signal_report,
     format_strategy_report,
     format_watchlist,
 )
+from .futoi import summarize_futoi
+from .portfolio import build_portfolio_risk
 from .scanner import build_signal_report, scan_tickers
 from .signals import classify_from_days, summarize_daily_flow
 from .storage import WatchlistStore
@@ -26,6 +39,7 @@ class Command:
     days: int = 1
     tickers: tuple[str, ...] = ()
     minutes: int | None = None
+    args: tuple[str, ...] = ()
 
 
 class MarketProvider(Protocol):
@@ -36,6 +50,8 @@ class MarketProvider(Protocol):
     async def obstats(self, ticker: str, start: str, end: str) -> list[dict]: ...
 
     async def alerts(self, ticker: str, start: str, end: str) -> list[dict]: ...
+
+    async def futoi(self, ticker: str, start: str, end: str) -> list[dict]: ...
 
     async def quote(self, ticker: str) -> dict: ...
 
@@ -63,11 +79,27 @@ def parse_command(text: str) -> Command:
         "unwatch",
         "watchlist",
         "mute",
+        "settings",
+        "score",
+        "quiet",
+        "types",
+        "heatmap",
+        "mega",
+        "digest",
+        "futoi",
+        "stats",
+        "portfolio_add",
+        "portfolio_remove",
+        "portfolio",
+        "portfolio_risk",
+        "channel_signal",
     }:
         return Command(name="help", ticker=None, days=1)
 
-    if name == "watchlist":
+    if name in {"watchlist", "settings", "portfolio", "portfolio_risk"}:
         return Command(name=name, ticker=None)
+    if name in {"score", "quiet", "types"}:
+        return Command(name=name, ticker=None, args=tuple(parts[1:]))
 
     ticker = parts[1].upper() if len(parts) >= 2 else None
     tickers = tuple(part.upper() for part in parts[1:] if not part.startswith("/"))
@@ -75,6 +107,10 @@ def parse_command(text: str) -> Command:
     days = 7 if name == "strategy" else 1
     if name == "scan":
         return Command(name=name, ticker=ticker, tickers=tickers)
+    if name in {"heatmap", "mega", "digest"}:
+        return Command(name=name, ticker=ticker, tickers=tickers)
+    if name in {"portfolio_add", "portfolio_remove", "futoi", "channel_signal"}:
+        return Command(name=name, ticker=ticker)
     if name == "watch":
         minutes = _parse_minutes(parts[2] if len(parts) >= 3 else None, default=15)
         return Command(name=name, ticker=ticker, minutes=minutes)
@@ -86,6 +122,11 @@ def parse_command(text: str) -> Command:
             days = max(1, min(30, int(parts[2])))
         except ValueError:
             days = 1
+    if len(parts) >= 3 and name == "stats":
+        try:
+            days = max(2, min(120, int(parts[2])))
+        except ValueError:
+            days = 30
     return Command(name=name, ticker=ticker, days=days)
 
 
@@ -102,12 +143,49 @@ async def handle_command(
     now = _normalize_datetime(now)
     if command.name == "help":
         return format_help()
-    if command.name in {"watchlist"}:
+    if command.name == "watchlist":
         if store is None or chat_id is None:
             return "Watchlist недоступен: нет локального хранилища или chat_id."
         return format_watchlist(store.list_watch(chat_id))
+    if command.name == "settings":
+        if store is None or chat_id is None:
+            return "Настройки недоступны: нет локального хранилища или chat_id."
+        return format_settings(store.get_settings(chat_id))
+    if command.name == "score":
+        if store is None or chat_id is None:
+            return "Настройки недоступны: нет локального хранилища или chat_id."
+        score = _parse_score(command.args[0] if command.args else None)
+        store.set_min_score(chat_id, score)
+        return f"Минимальная сила: {score}/100."
+    if command.name == "quiet":
+        if store is None or chat_id is None:
+            return "Настройки недоступны: нет локального хранилища или chat_id."
+        if len(command.args) < 2:
+            return "Укажите тихие часы: /quiet 23:00 07:00."
+        store.set_quiet_hours(chat_id, command.args[0], command.args[1])
+        return f"Тихие часы: {command.args[0]}-{command.args[1]}."
+    if command.name == "types":
+        if store is None or chat_id is None:
+            return "Настройки недоступны: нет локального хранилища или chat_id."
+        store.set_alert_types(chat_id, tuple(command.args))
+        return "Типы автосигналов: " + (", ".join(sorted(command.args)) if command.args else "все")
+    if command.name == "portfolio":
+        if store is None or chat_id is None:
+            return "Портфель недоступен: нет локального хранилища или chat_id."
+        return format_portfolio(store.list_portfolio(chat_id))
+    if command.name == "portfolio_risk":
+        if store is None or chat_id is None:
+            return "Портфель недоступен: нет локального хранилища или chat_id."
+        tickers = tuple(store.list_portfolio(chat_id))
+        if not tickers:
+            return format_portfolio_risk(build_portfolio_risk([]))
+        reports = await scan_tickers(provider, tickers, today=today or dt.date.today())
+        return format_portfolio_risk(build_portfolio_risk(reports))
     if not command.ticker:
-        return format_help()
+        if command.name in {"heatmap", "mega", "digest"}:
+            command = Command(name=command.name, ticker=None, tickers=_default_tickers())
+        else:
+            return format_help()
 
     if command.name == "watch":
         if store is None or chat_id is None:
@@ -131,6 +209,20 @@ async def handle_command(
         muted_until = now + dt.timedelta(minutes=minutes)
         store.mute(chat_id, command.ticker, muted_until)
         return f"Пауза для {command.ticker}: {minutes} мин."
+
+    if command.name == "portfolio_add":
+        if store is None or chat_id is None:
+            return "Портфель недоступен: нет локального хранилища или chat_id."
+        store.add_portfolio_ticker(chat_id, command.ticker, now=now)
+        return f"{command.ticker} добавлен в портфель."
+
+    if command.name == "portfolio_remove":
+        if store is None or chat_id is None:
+            return "Портфель недоступен: нет локального хранилища или chat_id."
+        removed = store.remove_portfolio_ticker(chat_id, command.ticker)
+        if removed:
+            return f"{command.ticker} удален из портфеля."
+        return f"{command.ticker} не найден в портфеле."
 
     end = today or dt.date.today()
     start = end - dt.timedelta(days=command.days - 1)
@@ -159,6 +251,33 @@ async def handle_command(
     if command.name == "scan":
         reports = await scan_tickers(provider, command.tickers or (command.ticker,), today=end)
         return format_scan_results(reports)
+
+    if command.name == "heatmap":
+        reports = await scan_tickers(provider, command.tickers or _default_tickers(), today=end)
+        return format_heatmap(build_heatmap(reports))
+
+    if command.name == "mega":
+        summaries = [
+            summarize_mega_alerts(ticker, await provider.alerts(ticker, start_s, end_s))
+            for ticker in (command.tickers or (command.ticker,))
+        ]
+        return format_mega_alert_summaries(summaries)
+
+    if command.name == "digest":
+        reports = await scan_tickers(provider, command.tickers or _default_tickers(), today=end)
+        return format_digest(build_heatmap(reports))
+
+    if command.name == "futoi":
+        rows = await provider.futoi(command.ticker, start_s, end_s)
+        return format_futoi_summary(summarize_futoi(command.ticker, rows))
+
+    if command.name == "stats":
+        rows = await provider.tradestats(command.ticker, start_s, end_s)
+        return format_flow_statistics(build_flow_statistics(command.ticker, rows))
+
+    if command.name == "channel_signal":
+        report = await _signal_report(provider, command.ticker, start_s, end_s)
+        return format_channel_signal(report)
 
     if command.name == "full":
         quote = format_quote_report(command.ticker, await provider.quote(command.ticker))
@@ -258,6 +377,20 @@ def _parse_minutes(value: str | None, *, default: int) -> int:
         return max(1, min(1440, int(normalized)))
     except ValueError:
         return default
+
+
+def _parse_score(value: str | None) -> int:
+    if not value:
+        return 60
+    try:
+        return max(0, min(100, int(value)))
+    except ValueError:
+        return 60
+
+
+def _default_tickers() -> tuple[str, ...]:
+    raw = os.environ.get("DEFAULT_SCAN_TICKERS", "ROSN SBER GAZP LKOH TATN TATNP")
+    return tuple(item.strip().upper() for item in raw.replace(",", " ").split() if item.strip())
 
 
 def _normalize_datetime(value: dt.datetime | None) -> dt.datetime:

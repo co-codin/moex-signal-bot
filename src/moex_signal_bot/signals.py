@@ -67,6 +67,7 @@ class SignalReport:
     state: TradeState
     score: int
     direction: str
+    alert_type: str
     latest_date: str
     latest_time: str
     price_change: float
