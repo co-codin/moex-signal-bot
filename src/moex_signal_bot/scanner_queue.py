@@ -7,6 +7,7 @@ import socket
 from dataclasses import dataclass
 from typing import Protocol
 
+from .access_control import AccessControlSettings, is_chat_allowed
 from .formatters import format_signal_report
 from .scanner import ScannerProvider, SignalSender, is_actionable, scan_tickers
 from .storage import WatchItem, WatchlistStore
@@ -178,8 +179,10 @@ async def process_scanner_job(
     now: dt.datetime | None = None,
     today: dt.date | None = None,
     min_score: int = 60,
+    access_settings: AccessControlSettings | None = None,
 ) -> int:
     now = _normalize_datetime(now)
+    access_settings = access_settings or AccessControlSettings()
     reports = await scan_tickers(provider, [job.ticker], today=today or now.date())
     if not reports:
         return 0
@@ -188,6 +191,8 @@ async def process_scanner_job(
     for chat_id in _job_chat_ids(store, job):
         item = _find_watch_item(store, chat_id, job.ticker)
         if item is None:
+            continue
+        if not is_chat_allowed(store, chat_id, access_settings):
             continue
         if store.is_muted(item, now):
             continue
@@ -222,12 +227,21 @@ async def scanner_worker_iteration(
     pop_timeout_seconds: int = 5,
     max_attempts: int = 3,
     retry_delay_seconds: float = 5.0,
+    access_settings: AccessControlSettings | None = None,
 ) -> int:
     message = await queue.pop(timeout_seconds=pop_timeout_seconds)
     if message is None:
         return 0
     try:
-        sent = await process_scanner_job(provider, store, telegram, message.job, now=now, today=today)
+        sent = await process_scanner_job(
+            provider,
+            store,
+            telegram,
+            message.job,
+            now=now,
+            today=today,
+            access_settings=access_settings,
+        )
         await queue.ack(message)
         return sent
     except Exception as exc:

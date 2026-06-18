@@ -5,10 +5,12 @@ description = "Russian Telegram bot for MOEX AlgoPack trading signals"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "fastapi>=0.115",
     "httpx>=0.27",
     "moexalgo>=2.0",
     "psycopg[binary]>=3.2",
     "redis>=5.0",
+    "uvicorn[standard]>=0.30",
 ]
 
 [project.optional-dependencies]

@@ -1,4 +1,4 @@
-.PHONY: help install test lint format check precommit dry-help docker-build compose-up compose-down compose-logs workers
+.PHONY: help install test lint format check precommit dry-help admin-web docker-build compose-up compose-down compose-logs workers
 
 PYTHON ?= python3
 PYTHONPATH ?= src
@@ -14,6 +14,7 @@ help:
 	@echo "  check         Run tests, lint, format check, and diff whitespace check"
 	@echo "  precommit     Run pre-commit on all files"
 	@echo "  dry-help      Run dry-run command, default /help"
+	@echo "  admin-web     Run local access-control admin web panel"
 	@echo "  docker-build  Build Docker image"
 	@echo "  compose-up    Start Postgres, Redis, bot, scheduler, and worker"
 	@echo "  workers       Scale scanner-worker, default WORKERS=3"
@@ -43,6 +44,9 @@ precommit:
 
 dry-help:
 	PYTHONPATH=$(PYTHONPATH) $(PYTHON) -m moex_signal_bot --dry-run "$(DRY_RUN_COMMAND)"
+
+admin-web:
+	PYTHONPATH=$(PYTHONPATH) $(PYTHON) -m moex_signal_bot --admin-web
 
 docker-build:
 	docker build --pull=false -t moex-signal-bot .

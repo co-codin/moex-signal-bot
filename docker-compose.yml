@@ -33,6 +33,24 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://moex:change-me@postgres:5432/moex_signal_bot}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      ACCESS_CONTROL_ENABLED: ${ACCESS_CONTROL_ENABLED:-false}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  admin-web:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "moex_signal_bot", "--admin-web"]
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://moex:change-me@postgres:5432/moex_signal_bot}
+      ACCESS_CONTROL_ENABLED: ${ACCESS_CONTROL_ENABLED:-false}
+      ADMIN_WEB_HOST: 0.0.0.0
+      ADMIN_WEB_PORT: 8080
+    ports:
+      - "8080:8080"
     depends_on:
       postgres:
         condition: service_healthy
@@ -47,6 +65,7 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql://moex:change-me@postgres:5432/moex_signal_bot}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       SCANNER_QUEUE_KEY: ${SCANNER_QUEUE_KEY:-moex:scanner:stream}
+      ACCESS_CONTROL_ENABLED: ${ACCESS_CONTROL_ENABLED:-false}
     depends_on:
       postgres:
         condition: service_healthy
@@ -63,6 +82,7 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql://moex:change-me@postgres:5432/moex_signal_bot}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       SCANNER_QUEUE_KEY: ${SCANNER_QUEUE_KEY:-moex:scanner:stream}
+      ACCESS_CONTROL_ENABLED: ${ACCESS_CONTROL_ENABLED:-false}
     depends_on:
       postgres:
         condition: service_healthy

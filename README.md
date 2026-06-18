@@ -23,6 +23,7 @@
 - Активность опционов MOEX ROPD по базовому активу и отдельному контракту.
 - Портфельный мониторинг риска.
 - Канальный формат `MOEX Flow Alert`.
+- Веб-админка для управления доступом Telegram-пользователей к боту.
 - Дедупликация автосигналов, чтобы не спамить пользователя одинаковыми событиями.
 - Docker-образ для запуска сервиса.
 - Ruff и pre-commit для проверки качества кода.
@@ -113,6 +114,7 @@ imbalance = (val_b - val_s) / (val_b + val_s)
 - тикер не находится на паузе после `/mute`.
 - текущее время не попадает в тихие часы `/quiet`;
 - тип сигнала проходит фильтр `/types`, если фильтр задан.
+- пользователь разрешен в админ-панели, если включен `ACCESS_CONTROL_ENABLED=true`.
 
 Типы сигналов Scanner Pro:
 
@@ -141,6 +143,12 @@ SCANNER_INTERVAL_SECONDS=60
 SCANNER_WORKER_POP_TIMEOUT_SECONDS=5
 SCANNER_MAX_ATTEMPTS=3
 SCANNER_RETRY_DELAY_SECONDS=5
+ACCESS_CONTROL_ENABLED=false
+ADMIN_CHAT_IDS=
+ADMIN_WEB_USERNAME=admin
+ADMIN_WEB_PASSWORD=change-me
+ADMIN_WEB_HOST=0.0.0.0
+ADMIN_WEB_PORT=8080
 DEFAULT_SCAN_TICKERS=ROSN SBER GAZP LKOH TATN TATNP
 DEFAULT_MARKETFLOW_TICKERS=TATN PLZL OZON LKOH GMKN ROSN SBER VTBR NVTK T GAZP MOEX SNGS YDEX X5
 ```
@@ -159,6 +167,10 @@ DEFAULT_MARKETFLOW_TICKERS=TATN PLZL OZON LKOH GMKN ROSN SBER VTBR NVTK T GAZP M
 - `SCANNER_WORKER_POP_TIMEOUT_SECONDS`: сколько worker ждет задачу из Redis перед следующим циклом.
 - `SCANNER_MAX_ATTEMPTS`: сколько повторных попыток делать для упавшей задачи.
 - `SCANNER_RETRY_DELAY_SECONDS`: пауза перед повторной постановкой упавшей задачи.
+- `ACCESS_CONTROL_ENABLED`: включает ограничение доступа к боту через админ-панель.
+- `ADMIN_CHAT_IDS`: chat_id владельцев, которые всегда разрешены и могут первыми попасть в базу.
+- `ADMIN_WEB_USERNAME`, `ADMIN_WEB_PASSWORD`: HTTP Basic логин и пароль админ-панели.
+- `ADMIN_WEB_HOST`, `ADMIN_WEB_PORT`: адрес и порт процесса `--admin-web`.
 - `DEFAULT_SCAN_TICKERS`: тикеры для `/heatmap`, `/mega` и `/digest`, если пользователь не указал список.
 - `DEFAULT_MARKETFLOW_TICKERS`: корзина тикеров для `/marketflow` без аргументов.
 
@@ -193,6 +205,28 @@ python -m moex_signal_bot --dry-run "/option SR100CC0"
 PYTHONPATH=src:/home/elijah/Desktop/moexalgo python3 -m moex_signal_bot --dry-run "/help"
 ```
 
+## Админ-панель доступа
+
+Веб-панель запускается отдельным процессом и использует ту же PostgreSQL базу, что bot и scanner-worker:
+
+```bash
+ACCESS_CONTROL_ENABLED=true \
+ADMIN_WEB_USERNAME=admin \
+ADMIN_WEB_PASSWORD=change-me \
+DATABASE_URL=postgresql://moex:change-me@localhost:5432/moex_signal_bot \
+python -m moex_signal_bot --admin-web
+```
+
+После запуска откройте `http://localhost:8080`. Панель показывает Telegram-пользователей, их `chat_id`, username, статус, заметку и кнопки смены статуса.
+
+Статусы:
+
+- `pending`: пользователь найден, но доступ еще не открыт.
+- `allowed`: пользователь может выполнять команды и получать автосигналы.
+- `blocked`: пользователь не может выполнять команды и не получает автосигналы.
+
+Если `ACCESS_CONTROL_ENABLED=false`, бот работает в открытом режиме, но все равно может записывать пользователей в `telegram_users` для будущего включения доступа. Если `ACCESS_CONTROL_ENABLED=true`, неизвестные пользователи получают русское сообщение с их `chat_id`, а администратор разрешает их через веб-панель. Размещайте панель за HTTPS или в приватной сети; HTTP Basic не заменяет полноценный периметр безопасности.
+
 ## Makefile
 
 Основные команды собраны в `Makefile`:
@@ -202,6 +236,7 @@ make install
 make test
 make lint
 make check
+make admin-web
 make docker-build
 make compose-up
 make workers WORKERS=3
@@ -209,7 +244,7 @@ make compose-logs
 make compose-down
 ```
 
-`make check` запускает `pytest`, `ruff check`, `ruff format --check` и `git diff --check`. `make workers WORKERS=3` масштабирует только `scanner-worker`; `bot` и `scanner-scheduler` должны оставаться в одном экземпляре.
+`make check` запускает `pytest`, `ruff check`, `ruff format --check` и `git diff --check`. `make admin-web` запускает локальную панель доступа. `make workers WORKERS=3` масштабирует только `scanner-worker`; `bot` и `scanner-scheduler` должны оставаться в одном экземпляре.
 
 ## Docker
 
@@ -225,6 +260,7 @@ docker compose up -d --build
 
 ```bash
 docker compose logs -f bot
+docker compose logs -f admin-web
 docker compose logs -f scanner-scheduler scanner-worker
 ```
 
@@ -252,6 +288,7 @@ docker build -t moex-signal-bot .
 
 ```bash
 docker run --rm --env-file .env moex-signal-bot
+docker run --rm --env-file .env moex-signal-bot python -m moex_signal_bot --admin-web
 docker run --rm --env-file .env moex-signal-bot python -m moex_signal_bot --scanner-scheduler
 docker run --rm --env-file .env moex-signal-bot python -m moex_signal_bot --scanner-worker
 ```
@@ -286,11 +323,13 @@ src/moex_signal_bot/
   signals.py          # базовые модели и классификация
   scanner.py          # скоринг и автоматический сканер
   scanner_queue.py    # Redis-очередь, scheduler jobs и worker processing
+  admin_web.py        # FastAPI админ-панель доступа
+  access_control.py   # правила доступа и Telegram user model
   analytics.py        # heatmap, MegaAlert feed, digest и статистика
   futoi.py            # агрегация открытого интереса FUTOI
   options.py          # агрегация активности опционов ROPD
   portfolio.py        # риск портфеля
-  storage.py          # PostgreSQL watchlist, настройки, портфель и дедупликация
+  storage.py          # PostgreSQL watchlist, настройки, доступ, портфель и дедупликация
   memory_storage.py   # in-memory store для тестов и dry-run без DATABASE_URL
   formatters.py       # русские текстовые отчеты
   telegram_client.py  # Telegram Bot API client
@@ -305,5 +344,6 @@ tests/                # unit и integration-style тесты
 - Запускайте только один экземпляр `bot`: Telegram long polling не рассчитан на несколько polling-реплик.
 - Запускайте только один `scanner-scheduler`, чтобы не ставить дублирующие задачи.
 - `scanner-worker` можно масштабировать через `docker compose up -d --scale scanner-worker=3`.
+- При включенном `ACCESS_CONTROL_ENABLED=true` проверьте `ADMIN_CHAT_IDS` и доступ к `admin-web`, чтобы не закрыть себе управление ботом.
 - Пользователь сам отвечает за интерпретацию сигналов, риск и размер позиции.
 - Перед расширением в сторону реальной торговли нужны отдельные risk controls, журнал решений, лимиты и ручное подтверждение.

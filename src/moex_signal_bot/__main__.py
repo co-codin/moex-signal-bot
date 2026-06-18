@@ -4,6 +4,13 @@ import argparse
 import asyncio
 import os
 
+from .access_control import (
+    AccessControlSettings,
+    access_denied_message,
+    access_settings_from_env,
+    is_chat_allowed,
+    record_telegram_user_from_message,
+)
 from .bot import handle_command
 from .commands import parse_command
 from .config import load_dotenv_values, moex_api_key, require_env
@@ -20,6 +27,7 @@ async def run_polling() -> None:
     provider = MoexProvider(api_key=moex_api_key())
     telegram = TelegramClient(require_env("TELEGRAM_BOT_TOKEN"))
     store = create_store()
+    access_settings = access_settings_from_env()
     offset: int | None = None
     try:
         while True:
@@ -27,16 +35,22 @@ async def run_polling() -> None:
             for update in updates:
                 offset = int(update["update_id"]) + 1
                 message = update.get("message") or {}
-                text = message.get("text")
                 chat = message.get("chat") or {}
                 chat_id = chat.get("id")
-                if not text or chat_id is None:
+                if chat_id is None:
                     continue
                 try:
-                    reply = await handle_command(text, provider, store=store, chat_id=int(chat_id))
+                    reply = await dispatch_telegram_message(
+                        message,
+                        provider,
+                        store,
+                        access_settings=access_settings,
+                    )
                 except Exception as exc:
                     print(f"Ошибка команды: {exc}", flush=True)
                     reply = _user_error_message(exc)
+                if reply is None:
+                    continue
                 await telegram.send_message(int(chat_id), reply)
     finally:
         store.close()
@@ -81,6 +95,7 @@ async def run_scanner_worker() -> None:
     telegram = TelegramClient(require_env("TELEGRAM_BOT_TOKEN"))
     store = create_store()
     queue = create_scanner_queue()
+    access_settings = access_settings_from_env()
     try:
         while True:
             sent = await scanner_worker_iteration(
@@ -88,6 +103,7 @@ async def run_scanner_worker() -> None:
                 store,
                 telegram,
                 queue,
+                access_settings=access_settings,
                 pop_timeout_seconds=_scanner_worker_pop_timeout_seconds(),
                 max_attempts=_scanner_max_attempts(),
                 retry_delay_seconds=_scanner_retry_delay_seconds(),
@@ -98,6 +114,48 @@ async def run_scanner_worker() -> None:
         store.close()
         await queue.close()
         await telegram.close()
+
+
+def run_admin_web() -> None:
+    load_dotenv_values()
+    import uvicorn
+
+    from .admin_web import create_admin_app
+
+    store = create_store()
+    try:
+        app = create_admin_app(
+            store,
+            username=require_env("ADMIN_WEB_USERNAME"),
+            password=require_env("ADMIN_WEB_PASSWORD"),
+        )
+        uvicorn.run(
+            app,
+            host=os.environ.get("ADMIN_WEB_HOST", "0.0.0.0"),
+            port=_env_int("ADMIN_WEB_PORT", default=8080, minimum=1),
+        )
+    finally:
+        store.close()
+
+
+async def dispatch_telegram_message(
+    message: dict,
+    provider: MoexProvider,
+    store,
+    *,
+    access_settings: AccessControlSettings | None = None,
+) -> str | None:
+    text = message.get("text")
+    chat = message.get("chat") or {}
+    chat_id = chat.get("id")
+    if not text or chat_id is None:
+        return None
+
+    settings = access_settings or AccessControlSettings()
+    chat_id = record_telegram_user_from_message(store, message, settings) or int(chat_id)
+    if not is_chat_allowed(store, chat_id, settings):
+        return access_denied_message(chat_id)
+    return await handle_command(str(text), provider, store=store, chat_id=int(chat_id))
 
 
 def _scanner_interval_seconds() -> int:
@@ -167,6 +225,7 @@ def main() -> None:
     parser.add_argument("--dry-run", help='Выполнить команду без Telegram, например "/flow ROSN 7"')
     parser.add_argument("--scanner-scheduler", action="store_true", help="Запустить постановщик задач автосканера")
     parser.add_argument("--scanner-worker", action="store_true", help="Запустить worker автосканера")
+    parser.add_argument("--admin-web", action="store_true", help="Запустить веб-панель управления доступом")
     args = parser.parse_args()
     if args.dry_run:
         asyncio.run(dry_run(args.dry_run))
@@ -174,6 +233,8 @@ def main() -> None:
         asyncio.run(run_scanner_scheduler())
     elif args.scanner_worker:
         asyncio.run(run_scanner_worker())
+    elif args.admin_web:
+        run_admin_web()
     else:
         asyncio.run(run_polling())
 

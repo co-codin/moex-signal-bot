@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 
+from .access_control import AccessStatus, TelegramUser, normalize_access_status
 from .storage import (
     ChatSettings,
     WatchItem,
@@ -20,6 +21,7 @@ class InMemoryWatchlistStore:
         self._settings: dict[int, ChatSettings] = {}
         self._sent_signals: dict[tuple[int, str, str, str], str] = {}
         self._portfolio: dict[tuple[int, str], dt.datetime] = {}
+        self._telegram_users: dict[int, TelegramUser] = {}
 
     def close(self) -> None:
         return None
@@ -180,3 +182,86 @@ class InMemoryWatchlistStore:
             if item_chat_id == chat_id
         ]
         return [ticker for ticker, _ in sorted(rows, key=lambda item: (item[1], item[0]))]
+
+    def record_telegram_user(
+        self,
+        chat_id: int,
+        *,
+        username: str | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        status: AccessStatus = "pending",
+        now: dt.datetime | None = None,
+    ) -> None:
+        now = _normalize_datetime(now)
+        chat_id = int(chat_id)
+        normalized_status = normalize_access_status(status)
+        existing = self._telegram_users.get(chat_id)
+        self._telegram_users[chat_id] = TelegramUser(
+            chat_id=chat_id,
+            username=username,
+            first_name=first_name,
+            last_name=last_name,
+            status="allowed" if normalized_status == "allowed" else existing.status if existing else normalized_status,
+            note=existing.note if existing else "",
+            first_seen_at=existing.first_seen_at if existing else now,
+            last_seen_at=now,
+        )
+
+    def get_telegram_user(self, chat_id: int) -> TelegramUser | None:
+        return self._telegram_users.get(int(chat_id))
+
+    def list_telegram_users(self, *, status: str | None = None, search: str | None = None) -> list[TelegramUser]:
+        normalized_status = normalize_access_status(status) if status else None
+        search_text = search.strip().lower() if search else ""
+        users = sorted(
+            self._telegram_users.values(),
+            key=lambda user: (user.last_seen_at or dt.datetime.min.replace(tzinfo=dt.UTC), user.chat_id),
+            reverse=True,
+        )
+        if normalized_status:
+            users = [user for user in users if user.status == normalized_status]
+        if search_text:
+            users = [user for user in users if _telegram_user_matches(user, search_text)]
+        return users
+
+    def set_telegram_user_status(self, chat_id: int, status: str) -> None:
+        chat_id = int(chat_id)
+        existing = self._telegram_users.get(chat_id)
+        now = _normalize_datetime(None)
+        self._telegram_users[chat_id] = TelegramUser(
+            chat_id=chat_id,
+            username=existing.username if existing else None,
+            first_name=existing.first_name if existing else None,
+            last_name=existing.last_name if existing else None,
+            status=normalize_access_status(status),
+            note=existing.note if existing else "",
+            first_seen_at=existing.first_seen_at if existing else now,
+            last_seen_at=existing.last_seen_at if existing else now,
+        )
+
+    def set_telegram_user_note(self, chat_id: int, note: str) -> None:
+        chat_id = int(chat_id)
+        existing = self._telegram_users.get(chat_id)
+        now = _normalize_datetime(None)
+        self._telegram_users[chat_id] = TelegramUser(
+            chat_id=chat_id,
+            username=existing.username if existing else None,
+            first_name=existing.first_name if existing else None,
+            last_name=existing.last_name if existing else None,
+            status=existing.status if existing else "pending",
+            note=note.strip(),
+            first_seen_at=existing.first_seen_at if existing else now,
+            last_seen_at=existing.last_seen_at if existing else now,
+        )
+
+
+def _telegram_user_matches(user: TelegramUser, search: str) -> bool:
+    fields = (
+        str(user.chat_id),
+        user.username or "",
+        user.first_name or "",
+        user.last_name or "",
+        user.note,
+    )
+    return any(search in field.lower() for field in fields)

@@ -5,6 +5,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from .access_control import AccessStatus, TelegramUser, normalize_access_status
+
 
 @dataclass(frozen=True)
 class WatchItem:
@@ -308,6 +310,90 @@ class PostgresWatchlistStore:
         ).fetchall()
         return [str(row["ticker"]) for row in rows]
 
+    def record_telegram_user(
+        self,
+        chat_id: int,
+        *,
+        username: str | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        status: AccessStatus = "pending",
+        now: dt.datetime | None = None,
+    ) -> None:
+        now = _normalize_datetime(now)
+        status = normalize_access_status(status)
+        self._write(
+            """
+            INSERT INTO telegram_users(
+                chat_id, username, first_name, last_name, status, note, first_seen_at, last_seen_at
+            )
+            VALUES (%s, %s, %s, %s, %s, '', %s, %s)
+            ON CONFLICT(chat_id)
+            DO UPDATE SET username = EXCLUDED.username,
+                          first_name = EXCLUDED.first_name,
+                          last_name = EXCLUDED.last_name,
+                          last_seen_at = EXCLUDED.last_seen_at,
+                          status = CASE
+                              WHEN EXCLUDED.status = 'allowed' THEN 'allowed'
+                              ELSE telegram_users.status
+                          END
+            """,
+            (int(chat_id), username, first_name, last_name, status, _dump_datetime(now), _dump_datetime(now)),
+        )
+
+    def get_telegram_user(self, chat_id: int) -> TelegramUser | None:
+        row = self._conn.execute(
+            """
+            SELECT chat_id, username, first_name, last_name, status, note, first_seen_at, last_seen_at
+            FROM telegram_users
+            WHERE chat_id = %s
+            """,
+            (int(chat_id),),
+        ).fetchone()
+        return _telegram_user(row) if row is not None else None
+
+    def list_telegram_users(self, *, status: str | None = None, search: str | None = None) -> list[TelegramUser]:
+        normalized_status = normalize_access_status(status) if status else None
+        rows = self._conn.execute(
+            """
+            SELECT chat_id, username, first_name, last_name, status, note, first_seen_at, last_seen_at
+            FROM telegram_users
+            ORDER BY last_seen_at DESC, chat_id DESC
+            """
+        ).fetchall()
+        users = [_telegram_user(row) for row in rows]
+        if normalized_status:
+            users = [user for user in users if user.status == normalized_status]
+        search_text = search.strip().lower() if search else ""
+        if search_text:
+            users = [user for user in users if _telegram_user_matches(user, search_text)]
+        return users
+
+    def set_telegram_user_status(self, chat_id: int, status: str) -> None:
+        status = normalize_access_status(status)
+        now = _normalize_datetime(None)
+        self._write(
+            """
+            INSERT INTO telegram_users(chat_id, status, note, first_seen_at, last_seen_at)
+            VALUES (%s, %s, '', %s, %s)
+            ON CONFLICT(chat_id)
+            DO UPDATE SET status = EXCLUDED.status
+            """,
+            (int(chat_id), status, _dump_datetime(now), _dump_datetime(now)),
+        )
+
+    def set_telegram_user_note(self, chat_id: int, note: str) -> None:
+        now = _normalize_datetime(None)
+        self._write(
+            """
+            INSERT INTO telegram_users(chat_id, status, note, first_seen_at, last_seen_at)
+            VALUES (%s, 'pending', %s, %s, %s)
+            ON CONFLICT(chat_id)
+            DO UPDATE SET note = EXCLUDED.note
+            """,
+            (int(chat_id), note.strip(), _dump_datetime(now), _dump_datetime(now)),
+        )
+
     def _write(self, sql: str, params: tuple[Any, ...]) -> Any:
         cursor = self._conn.execute(sql, params)
         self._conn.commit()
@@ -363,6 +449,26 @@ class PostgresWatchlistStore:
         )
         self._conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS telegram_users (
+                chat_id BIGINT PRIMARY KEY,
+                username TEXT,
+                first_name TEXT,
+                last_name TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                note TEXT NOT NULL DEFAULT '',
+                first_seen_at TIMESTAMPTZ NOT NULL,
+                last_seen_at TIMESTAMPTZ NOT NULL
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS telegram_users_status_idx
+            ON telegram_users(status)
+            """
+        )
+        self._conn.execute(
+            """
             ALTER TABLE sent_signals
             ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'sent'
             """
@@ -403,6 +509,30 @@ def _watch_item(row: Mapping[str, Any]) -> WatchItem:
         created_at=_load_datetime(row["created_at"]) or dt.datetime.now(dt.UTC),
         last_checked_at=_load_datetime(row["last_checked_at"]),
     )
+
+
+def _telegram_user(row: Mapping[str, Any]) -> TelegramUser:
+    return TelegramUser(
+        chat_id=int(row["chat_id"]),
+        username=row["username"],
+        first_name=row["first_name"],
+        last_name=row["last_name"],
+        status=normalize_access_status(row["status"]),
+        note=str(row["note"] or ""),
+        first_seen_at=_load_datetime(row["first_seen_at"]),
+        last_seen_at=_load_datetime(row["last_seen_at"]),
+    )
+
+
+def _telegram_user_matches(user: TelegramUser, search: str) -> bool:
+    fields = (
+        str(user.chat_id),
+        user.username or "",
+        user.first_name or "",
+        user.last_name or "",
+        user.note,
+    )
+    return any(search in field.lower() for field in fields)
 
 
 def _is_due(item: WatchItem, now: dt.datetime) -> bool:

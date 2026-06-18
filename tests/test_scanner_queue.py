@@ -3,6 +3,7 @@ import datetime as dt
 
 from test_scanner import FakeProvider, FakeTelegram
 
+from moex_signal_bot.access_control import AccessControlSettings
 from moex_signal_bot.memory_storage import InMemoryWatchlistStore
 from moex_signal_bot.scanner_queue import (
     RedisScannerQueue,
@@ -80,6 +81,34 @@ def test_process_scanner_job_scans_once_and_fans_out_to_due_chats():
         ("tradestats", "ROSN", "2026-06-18", "2026-06-18")
     ]
     assert [chat_id for chat_id, _ in telegram.sent] == [123, 456]
+
+
+def test_process_scanner_job_skips_non_allowed_chats_when_access_control_enabled():
+    now = dt.datetime(2026, 6, 18, 11, 0, tzinfo=dt.UTC)
+    store = InMemoryWatchlistStore()
+    store.add_watch(123, "rosn", interval_minutes=15, now=now)
+    store.add_watch(456, "ROSN", interval_minutes=15, now=now)
+    store.record_telegram_user(123, username="pending")
+    store.record_telegram_user(456, username="paid")
+    store.set_telegram_user_status(456, "allowed")
+    telegram = FakeTelegram()
+    provider = FakeProvider()
+    job = ScannerJob(ticker="ROSN", queued_at=now, chat_ids=(123, 456))
+
+    sent = asyncio.run(
+        process_scanner_job(
+            provider,
+            store,
+            telegram,
+            job,
+            now=now,
+            today=dt.date(2026, 6, 18),
+            access_settings=AccessControlSettings(enabled=True, admin_chat_ids=()),
+        )
+    )
+
+    assert sent == 1
+    assert [chat_id for chat_id, _ in telegram.sent] == [456]
 
 
 def test_process_scanner_job_releases_reservation_when_send_fails():
