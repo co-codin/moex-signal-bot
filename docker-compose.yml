@@ -31,7 +31,8 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-moex}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-moex_signal_bot}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://moex:change-me@postgres:5432/moex_signal_bot}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     depends_on:
       postgres:
         condition: service_healthy
@@ -43,9 +44,9 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-moex}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-moex_signal_bot}
-      REDIS_URL: redis://redis:6379/0
-      SCANNER_QUEUE_KEY: ${SCANNER_QUEUE_KEY:-moex:scanner:jobs}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://moex:change-me@postgres:5432/moex_signal_bot}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      SCANNER_QUEUE_KEY: ${SCANNER_QUEUE_KEY:-moex:scanner:stream}
     depends_on:
       postgres:
         condition: service_healthy
@@ -59,9 +60,9 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-moex}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-moex_signal_bot}
-      REDIS_URL: redis://redis:6379/0
-      SCANNER_QUEUE_KEY: ${SCANNER_QUEUE_KEY:-moex:scanner:jobs}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://moex:change-me@postgres:5432/moex_signal_bot}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      SCANNER_QUEUE_KEY: ${SCANNER_QUEUE_KEY:-moex:scanner:stream}
     depends_on:
       postgres:
         condition: service_healthy

@@ -191,10 +191,14 @@ async def run_scan_once(
         if settings.alert_types and report.alert_type not in settings.alert_types:
             store.mark_checked(item.chat_id, item.ticker, now)
             continue
-        if is_actionable(report, min_score=threshold) and not store.was_signal_sent(
-            item.chat_id, report.ticker, report.state.code, report.signal_key
+        if is_actionable(report, min_score=threshold) and store.reserve_signal(
+            item.chat_id, report.ticker, report.state.code, report.signal_key, now
         ):
-            await telegram.send_message(item.chat_id, format_signal_report(report, automatic=True))
+            try:
+                await telegram.send_message(item.chat_id, format_signal_report(report, automatic=True))
+            except Exception:
+                store.release_signal_reservation(item.chat_id, report.ticker, report.state.code, report.signal_key)
+                raise
             store.mark_signal_sent(item.chat_id, report.ticker, report.state.code, report.signal_key, now)
             sent += 1
         store.mark_checked(item.chat_id, item.ticker, now)

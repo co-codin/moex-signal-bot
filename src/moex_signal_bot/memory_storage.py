@@ -18,7 +18,7 @@ class InMemoryWatchlistStore:
     def __init__(self) -> None:
         self._watch: dict[tuple[int, str], WatchItem] = {}
         self._settings: dict[int, ChatSettings] = {}
-        self._sent_signals: set[tuple[int, str, str, str]] = set()
+        self._sent_signals: dict[tuple[int, str, str, str], str] = {}
         self._portfolio: dict[tuple[int, str], dt.datetime] = {}
 
     def close(self) -> None:
@@ -51,6 +51,13 @@ class InMemoryWatchlistStore:
 
     def list_watch(self, chat_id: int) -> list[WatchItem]:
         return sorted((item for item in self._watch.values() if item.chat_id == chat_id), key=lambda item: item.ticker)
+
+    def list_watch_by_ticker(self, ticker: str) -> list[WatchItem]:
+        ticker = ticker.upper()
+        return sorted(
+            (item for item in self._watch.values() if item.ticker == ticker),
+            key=lambda item: (item.chat_id, item.ticker),
+        )
 
     def list_due(self, now: dt.datetime | None = None) -> list[WatchItem]:
         now = _normalize_datetime(now)
@@ -90,7 +97,27 @@ class InMemoryWatchlistStore:
         )
 
     def was_signal_sent(self, chat_id: int, ticker: str, signal_code: str, signal_key: str) -> bool:
-        return (chat_id, ticker.upper(), signal_code, signal_key) in self._sent_signals
+        return self._sent_signals.get((chat_id, ticker.upper(), signal_code, signal_key)) == "sent"
+
+    def reserve_signal(
+        self,
+        chat_id: int,
+        ticker: str,
+        signal_code: str,
+        signal_key: str,
+        reserved_at: dt.datetime | None = None,
+    ) -> bool:
+        _normalize_datetime(reserved_at)
+        key = (chat_id, ticker.upper(), signal_code, signal_key)
+        if key in self._sent_signals:
+            return False
+        self._sent_signals[key] = "reserved"
+        return True
+
+    def release_signal_reservation(self, chat_id: int, ticker: str, signal_code: str, signal_key: str) -> None:
+        key = (chat_id, ticker.upper(), signal_code, signal_key)
+        if self._sent_signals.get(key) == "reserved":
+            self._sent_signals.pop(key, None)
 
     def mark_signal_sent(
         self,
@@ -101,7 +128,7 @@ class InMemoryWatchlistStore:
         sent_at: dt.datetime | None = None,
     ) -> None:
         _normalize_datetime(sent_at)
-        self._sent_signals.add((chat_id, ticker.upper(), signal_code, signal_key))
+        self._sent_signals[(chat_id, ticker.upper(), signal_code, signal_key)] = "sent"
 
     def get_settings(self, chat_id: int) -> ChatSettings:
         return self._settings.get(chat_id, ChatSettings(chat_id=chat_id))

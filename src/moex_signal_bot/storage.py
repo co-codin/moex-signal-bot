@@ -87,17 +87,31 @@ class PostgresWatchlistStore:
         ).fetchall()
         return [_watch_item(row) for row in rows]
 
+    def list_watch_by_ticker(self, ticker: str) -> list[WatchItem]:
+        rows = self._conn.execute(
+            """
+            SELECT chat_id, ticker, interval_minutes, muted_until, created_at, last_checked_at
+            FROM watchlist
+            WHERE ticker = %s
+            ORDER BY chat_id, ticker
+            """,
+            (ticker.upper(),),
+        ).fetchall()
+        return [_watch_item(row) for row in rows]
+
     def list_due(self, now: dt.datetime | None = None) -> list[WatchItem]:
         now = _normalize_datetime(now)
         rows = self._conn.execute(
             """
             SELECT chat_id, ticker, interval_minutes, muted_until, created_at, last_checked_at
             FROM watchlist
+            WHERE last_checked_at IS NULL
+               OR last_checked_at + (interval_minutes * INTERVAL '1 minute') <= %s
             ORDER BY chat_id, ticker
-            """
+            """,
+            (_dump_datetime(now),),
         ).fetchall()
-        items = [_watch_item(row) for row in rows]
-        return [item for item in items if _is_due(item, now)]
+        return [_watch_item(row) for row in rows]
 
     def mute(self, chat_id: int, ticker: str, muted_until: dt.datetime) -> None:
         muted_until = _normalize_datetime(muted_until)
@@ -131,10 +145,43 @@ class PostgresWatchlistStore:
             SELECT 1
             FROM sent_signals
             WHERE chat_id = %s AND ticker = %s AND signal_code = %s AND signal_key = %s
+              AND status = 'sent'
             """,
             (chat_id, ticker.upper(), signal_code, signal_key),
         ).fetchone()
         return row is not None
+
+    def reserve_signal(
+        self,
+        chat_id: int,
+        ticker: str,
+        signal_code: str,
+        signal_key: str,
+        reserved_at: dt.datetime | None = None,
+    ) -> bool:
+        reserved_at = _normalize_datetime(reserved_at)
+        cursor = self._write(
+            """
+            INSERT INTO sent_signals(chat_id, ticker, signal_code, signal_key, sent_at, status)
+            VALUES (%s, %s, %s, %s, %s, 'reserved')
+            ON CONFLICT(chat_id, ticker, signal_code, signal_key) DO NOTHING
+            """,
+            (chat_id, ticker.upper(), signal_code, signal_key, _dump_datetime(reserved_at)),
+        )
+        return cursor.rowcount > 0
+
+    def release_signal_reservation(self, chat_id: int, ticker: str, signal_code: str, signal_key: str) -> None:
+        self._write(
+            """
+            DELETE FROM sent_signals
+            WHERE chat_id = %s
+              AND ticker = %s
+              AND signal_code = %s
+              AND signal_key = %s
+              AND status = 'reserved'
+            """,
+            (chat_id, ticker.upper(), signal_code, signal_key),
+        )
 
     def mark_signal_sent(
         self,
@@ -147,9 +194,11 @@ class PostgresWatchlistStore:
         sent_at = _normalize_datetime(sent_at)
         self._write(
             """
-            INSERT INTO sent_signals(chat_id, ticker, signal_code, signal_key, sent_at)
-            VALUES (%s, %s, %s, %s, %s)
-            ON CONFLICT(chat_id, ticker, signal_code, signal_key) DO NOTHING
+            INSERT INTO sent_signals(chat_id, ticker, signal_code, signal_key, sent_at, status)
+            VALUES (%s, %s, %s, %s, %s, 'sent')
+            ON CONFLICT(chat_id, ticker, signal_code, signal_key)
+            DO UPDATE SET sent_at = EXCLUDED.sent_at,
+                          status = 'sent'
             """,
             (chat_id, ticker.upper(), signal_code, signal_key, _dump_datetime(sent_at)),
         )
@@ -307,8 +356,27 @@ class PostgresWatchlistStore:
                 signal_code TEXT NOT NULL,
                 signal_key TEXT NOT NULL,
                 sent_at TIMESTAMPTZ NOT NULL,
+                status TEXT NOT NULL DEFAULT 'sent',
                 PRIMARY KEY(chat_id, ticker, signal_code, signal_key)
             )
+            """
+        )
+        self._conn.execute(
+            """
+            ALTER TABLE sent_signals
+            ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'sent'
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS watchlist_due_idx
+            ON watchlist(last_checked_at)
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS watchlist_ticker_idx
+            ON watchlist(ticker)
             """
         )
         self._conn.commit()

@@ -18,6 +18,8 @@ def test_ruff_precommit_and_docker_files_exist():
     assert "redis:7-alpine" in compose
     assert "--scanner-scheduler" in compose
     assert "--scanner-worker" in compose
+    assert "DATABASE_URL: ${DATABASE_URL:-postgresql://moex:change-me@postgres:5432/moex_signal_bot}" in compose
+    assert "REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}" in compose
     assert "check:" in makefile
     assert "compose-up:" in makefile
     assert "workers:" in makefile

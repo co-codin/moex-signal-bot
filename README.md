@@ -2,7 +2,7 @@
 
 Русскоязычный Telegram-бот для анализа российских акций на MOEX по данным `moexalgo` и ALGOPACK.
 
-Бот показывает котировки, покупательную и продавцовую силу, состояние стакана, давление заявок, события MegaAlert и скоринговые торговые сигналы. Также есть MOEX Flow Pro: автоматический Scanner Pro через Redis-очередь и worker-процессы, расширенные настройки watchlist, FUTOI по фьючерсам, тепловая карта, портфельный риск, дайджест, простая статистика похожих состояний и короткий формат сигнала для Telegram-каналов.
+Бот показывает котировки, покупательную и продавцовую силу, состояние стакана, давление заявок, события MegaAlert и скоринговые торговые сигналы. Также есть MOEX Flow Pro: автоматический Scanner Pro через Redis Streams и worker-процессы, расширенные настройки watchlist, FUTOI по фьючерсам, тепловая карта, портфельный риск, дайджест, простая статистика похожих состояний и короткий формат сигнала для Telegram-каналов.
 
 Сигналы являются аналитикой по данным, а не инвестиционной рекомендацией.
 
@@ -15,7 +15,7 @@
 - Анализ `MegaAlert`: аномальные события ALGOPACK.
 - Скоринговые сигналы по нескольким источникам данных.
 - Watchlist и автоматический сканер с хранением в PostgreSQL.
-- Redis-очередь для фонового автосканера и горизонтального масштабирования scanner workers.
+- Redis Streams очередь с ACK/reclaim для фонового автосканера и горизонтального масштабирования scanner workers.
 - Настройки автосканера: минимальный score, тихие часы и фильтр типов сигналов.
 - Тепловая карта по тикерам и краткий рыночный дайджест.
 - FUTOI по фьючерсам MOEX.
@@ -94,8 +94,8 @@ imbalance = (val_b - val_s) / (val_b + val_s)
 Автосканер работает в три шага:
 
 1. `bot` принимает Telegram-команды и пишет watchlist/settings в PostgreSQL.
-2. `scanner-scheduler` регулярно ищет due watchlist items и ставит задачи в Redis.
-3. Один или несколько `scanner-worker` процессов берут задачи из Redis, читают MOEX/ALGOPACK, проверяют дедупликацию в PostgreSQL и отправляют Telegram-сигналы.
+2. `scanner-scheduler` регулярно ищет due watchlist items и ставит ticker-level задачи в Redis Stream.
+3. Один или несколько `scanner-worker` процессов берут задачи из Redis Stream, читают MOEX/ALGOPACK один раз на тикер, проверяют дедупликацию в PostgreSQL и отправляют Telegram-сигналы всем due чатам из задачи.
 
 Автосканер отправляет сообщение только если:
 
@@ -129,7 +129,7 @@ POSTGRES_USER=moex
 POSTGRES_PASSWORD=change-me
 DATABASE_URL=postgresql://moex:change-me@postgres:5432/moex_signal_bot
 REDIS_URL=redis://redis:6379/0
-SCANNER_QUEUE_KEY=moex:scanner:jobs
+SCANNER_QUEUE_KEY=moex:scanner:stream
 SCANNER_INTERVAL_SECONDS=60
 SCANNER_WORKER_POP_TIMEOUT_SECONDS=5
 SCANNER_MAX_ATTEMPTS=3
@@ -146,7 +146,7 @@ DEFAULT_SCAN_TICKERS=ROSN SBER GAZP LKOH TATN TATNP
 - `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`: параметры контейнера PostgreSQL в Docker Compose.
 - `DATABASE_URL`: строка подключения PostgreSQL для watchlist, настроек, портфеля и дедупликации.
 - `REDIS_URL`: строка подключения Redis для очереди задач автосканера.
-- `SCANNER_QUEUE_KEY`: имя Redis-очереди для задач автосканера.
+- `SCANNER_QUEUE_KEY`: имя Redis Stream для задач автосканера.
 - `SCANNER_INTERVAL_SECONDS`: частота scheduler-цикла автосканера.
 - `SCANNER_WORKER_POP_TIMEOUT_SECONDS`: сколько worker ждет задачу из Redis перед следующим циклом.
 - `SCANNER_MAX_ATTEMPTS`: сколько повторных попыток делать для упавшей задачи.

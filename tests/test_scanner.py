@@ -129,6 +129,27 @@ def test_run_scan_once_sends_due_actionable_signals_once(tmp_path):
     assert "Автосигнал ROSN" in telegram.sent[0][1]
 
 
+def test_run_scan_once_releases_signal_reservation_when_send_fails(tmp_path):
+    class FailingTelegram(FakeTelegram):
+        async def send_message(self, chat_id, text):
+            raise RuntimeError("telegram down")
+
+    now = dt.datetime(2026, 6, 18, 11, 0, tzinfo=dt.UTC)
+    store = WatchlistStore()
+    store.add_watch(123, "rosn", interval_minutes=5, now=now)
+
+    try:
+        asyncio.run(run_scan_once(FakeProvider(), store, FailingTelegram(), now=now, today=dt.date(2026, 6, 18)))
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("telegram failure must propagate")
+
+    signal_key = "2026-06-18:10:05:00:sell_pressure:94"
+    assert store.was_signal_sent(123, "ROSN", "sell_pressure", signal_key) is False
+    assert store.reserve_signal(123, "ROSN", "sell_pressure", signal_key, now) is True
+
+
 def test_run_scan_once_respects_chat_min_score(tmp_path):
     now = dt.datetime(2026, 6, 18, 11, 0, tzinfo=dt.UTC)
     store = WatchlistStore()
