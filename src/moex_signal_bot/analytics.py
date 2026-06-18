@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -50,7 +49,7 @@ def build_heatmap(reports: Iterable[SignalReport], *, limit: int = 10) -> list[H
             alert_type=report.alert_type,
             buy_power=report.buy_power,
             sell_power=report.sell_power,
-            megaalerts=_megaalert_count(report),
+            megaalerts=report.features.megaalert_count,
         )
         for report in reports
     ]
@@ -84,11 +83,10 @@ def build_flow_statistics(ticker: str, rows: Iterable[Mapping[str, Any]]) -> Flo
         )
 
     states = [classify_from_days([day]) for day in days]
-    dominant_code = Counter(state.code for state in states).most_common(1)[0][0]
-    dominant_title = next(state.title for state in states if state.code == dominant_code)
+    target_state = states[-1]
     up_after = down_after = flat_after = samples = 0
     for index, day in enumerate(days[:-1]):
-        if classify_from_days([day]).code != dominant_code:
+        if states[index].code != target_state.code:
             continue
         samples += 1
         next_day = days[index + 1]
@@ -100,20 +98,10 @@ def build_flow_statistics(ticker: str, rows: Iterable[Mapping[str, Any]]) -> Flo
             flat_after += 1
     return FlowStatistics(
         ticker=ticker.upper(),
-        state_code=dominant_code,
-        state_title=dominant_title,
+        state_code=target_state.code,
+        state_title=target_state.title,
         samples=samples,
         up_after=up_after,
         down_after=down_after,
         flat_after=flat_after,
     )
-
-
-def _megaalert_count(report: SignalReport) -> int:
-    total = 0
-    for reason in report.reasons:
-        if "MegaAlert" not in reason:
-            continue
-        match = re.search(r"(\d+)", reason)
-        total += int(match.group(1)) if match else 1
-    return total

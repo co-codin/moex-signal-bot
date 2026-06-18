@@ -25,6 +25,17 @@ class ChatSettings:
     alert_types: tuple[str, ...] = ()
 
 
+ALLOWED_ALERT_TYPES = (
+    "sell_pressure",
+    "absorption",
+    "bullish_reversal",
+    "weak_bounce",
+    "breakdown",
+    "reclaim",
+    "megaalert_cluster",
+)
+
+
 class WatchlistStore:
     def __init__(self, path: str | Path) -> None:
         self.path = str(path)
@@ -208,7 +219,7 @@ class WatchlistStore:
             )
 
     def set_alert_types(self, chat_id: int, alert_types: tuple[str, ...]) -> None:
-        normalized = tuple(sorted({item.lower() for item in alert_types if item.strip()}))
+        normalized = _normalize_alert_types(alert_types)
         settings = self.get_settings(chat_id)
         with self._conn:
             self._conn.execute(
@@ -351,6 +362,20 @@ def _load_alert_types(value: str | None) -> tuple[str, ...]:
     return tuple(item for item in value.split(",") if item)
 
 
+def _normalize_alert_types(values: tuple[str, ...]) -> tuple[str, ...]:
+    lowered = tuple(item.strip().lower() for item in values if item.strip())
+    if lowered in {("all",), ("reset",), ("все",)}:
+        return ()
+    unknown = tuple(item for item in lowered if item not in ALLOWED_ALERT_TYPES)
+    if unknown:
+        allowed = ", ".join(ALLOWED_ALERT_TYPES)
+        raise ValueError(f"Неизвестный тип автосигнала: {', '.join(unknown)}. Доступно: {allowed}.")
+    return tuple(sorted(set(lowered)))
+
+
 def _normalize_time_value(value: str) -> str:
-    parsed = dt.time.fromisoformat(value)
+    try:
+        parsed = dt.time.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError("Неверный формат времени. Используйте HH:MM, например 23:00.") from exc
     return parsed.strftime("%H:%M")

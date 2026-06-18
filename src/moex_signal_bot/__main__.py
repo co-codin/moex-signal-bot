@@ -34,7 +34,8 @@ async def run_polling() -> None:
                 try:
                     reply = await handle_command(text, provider, store=store, chat_id=int(chat_id))
                 except Exception as exc:
-                    reply = f"Ошибка: {exc}"
+                    print(f"Ошибка команды: {exc}", flush=True)
+                    reply = _user_error_message(exc)
                 await telegram.send_message(int(chat_id), reply)
     finally:
         scanner_task.cancel()
@@ -70,6 +71,12 @@ def _scanner_interval_seconds() -> int:
         return max(10, int(raw))
     except ValueError:
         return 60
+
+
+def _user_error_message(exc: Exception) -> str:
+    if isinstance(exc, ValueError) and str(exc):
+        return str(exc)
+    return "Ошибка: не удалось выполнить команду. Проверьте параметры или попробуйте позже."
 
 
 def main() -> None:

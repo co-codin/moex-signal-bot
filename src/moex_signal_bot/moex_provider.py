@@ -44,6 +44,9 @@ class MoexProvider:
 
         def fetch() -> dict:
             instrument = self._ticker_factory(ticker)
+            quote = _quote_from_marketdata(instrument, ticker)
+            if quote is not None:
+                return quote
             today = dt.date.today().isoformat()
             candles = list(instrument.candles(start=today, end=today, period="1D", latest=True, native=True))
             latest = candles[-1] if candles else {}
@@ -65,3 +68,24 @@ class MoexProvider:
             return list(method(start=start, end=end, native=True))
 
         return await asyncio.to_thread(fetch)
+
+
+def _quote_from_marketdata(instrument: Any, ticker: str) -> dict | None:
+    market = getattr(instrument, "market", None)
+    marketdata = getattr(market, "marketdata", None)
+    if marketdata is None:
+        return None
+    rows = list(marketdata("secid", "last", "bid", "offer", "lasttoprevprice", "updatetime", native=True))
+    for row in rows:
+        row_ticker = str(row.get("ticker") or row.get("secid") or "").upper()
+        if row_ticker != ticker:
+            continue
+        return {
+            "ticker": ticker,
+            "last": row.get("last"),
+            "bid": row.get("bid"),
+            "offer": row.get("offer"),
+            "last_to_prev_pct": row.get("lasttoprevprice"),
+            "time": row.get("updatetime"),
+        }
+    return None

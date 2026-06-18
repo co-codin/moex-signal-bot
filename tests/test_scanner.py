@@ -41,6 +41,11 @@ def test_build_signal_report_scores_sell_pressure_from_multiple_sources():
     assert report.score >= 80
     assert report.direction == "short"
     assert report.alert_type == "breakdown"
+    assert report.features.low_alerts == 2
+    assert report.features.high_alerts == 0
+    assert report.features.megaalert_count == 2
+    assert report.features.order_bias < 0
+    assert report.features.bbo_imbalance < 0
     assert report.support == 328
     assert "давление продаж" in " ".join(report.reasons).lower()
 
@@ -70,16 +75,23 @@ def test_build_signal_report_detects_absorption_when_buyers_hold_down_move():
 
 
 class FakeProvider:
+    def __init__(self):
+        self.calls = []
+
     async def tradestats(self, ticker, start, end):
+        self.calls.append(("tradestats", ticker, start, end))
         return SELLING_TRADESTATS if ticker == "ROSN" else []
 
     async def orderstats(self, ticker, start, end):
+        self.calls.append(("orderstats", ticker, start, end))
         return [{"put_val_b": 30_000_000, "put_val_s": 120_000_000}]
 
     async def obstats(self, ticker, start, end):
+        self.calls.append(("obstats", ticker, start, end))
         return [{"tradedate": "2026-06-18", "tradetime": "10:05:00", "imbalance_val_bbo": -0.21}]
 
     async def alerts(self, ticker, start, end):
+        self.calls.append(("alerts", ticker, start, end))
         return [{"tradedate": "2026-06-18", "tradetime": "10:05:00", "alert_type": "pr_low_min", "value": 328}]
 
 
@@ -143,14 +155,31 @@ def test_run_scan_once_respects_alert_type_filter(tmp_path):
     assert telegram.sent == []
 
 
+def test_run_scan_once_skips_provider_calls_for_muted_items(tmp_path):
+    now = dt.datetime(2026, 6, 18, 11, 0, tzinfo=dt.UTC)
+    store = WatchlistStore(tmp_path / "signals.sqlite3")
+    store.add_watch(123, "rosn", interval_minutes=5, now=now)
+    store.mute(123, "rosn", now + dt.timedelta(minutes=60))
+    provider = FakeProvider()
+    telegram = FakeTelegram()
+
+    sent = asyncio.run(run_scan_once(provider, store, telegram, now=now, today=dt.date(2026, 6, 18)))
+
+    assert sent == 0
+    assert provider.calls == []
+    assert telegram.sent == []
+
+
 def test_run_scan_once_respects_quiet_hours(tmp_path):
     now = dt.datetime(2026, 6, 18, 21, 15, tzinfo=dt.UTC)
     store = WatchlistStore(tmp_path / "signals.sqlite3")
     store.add_watch(123, "rosn", interval_minutes=5, now=now)
     store.set_quiet_hours(123, "21:00", "07:00")
+    provider = FakeProvider()
     telegram = FakeTelegram()
 
-    sent = asyncio.run(run_scan_once(FakeProvider(), store, telegram, now=now, today=dt.date(2026, 6, 18)))
+    sent = asyncio.run(run_scan_once(provider, store, telegram, now=now, today=dt.date(2026, 6, 18)))
 
     assert sent == 0
+    assert provider.calls == []
     assert telegram.sent == []

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -62,6 +62,15 @@ class TradeState:
 
 
 @dataclass(frozen=True)
+class SignalFeatures:
+    low_alerts: int = 0
+    high_alerts: int = 0
+    megaalert_count: int = 0
+    order_bias: float = 0.0
+    bbo_imbalance: float = 0.0
+
+
+@dataclass(frozen=True)
 class SignalReport:
     ticker: str
     state: TradeState
@@ -78,6 +87,7 @@ class SignalReport:
     reclaim: float | None
     reasons: tuple[str, ...]
     signal_key: str
+    features: SignalFeatures = field(default_factory=SignalFeatures)
 
 
 def _number(row: Mapping[str, Any], key: str) -> float:

@@ -61,6 +61,7 @@ def test_parse_command_defaults_to_russian_help_for_unknown_text():
     assert parse_command("/watch rosn 5m").minutes == 5
     assert parse_command("/heatmap rosn sber").tickers == ("ROSN", "SBER")
     assert parse_command("/score 75").args == ("75",)
+    assert parse_command("/stats rosn").days == 30
     assert parse_command("что делать") == Command(name="help", ticker=None, days=1)
 
 
@@ -145,6 +146,16 @@ def test_handle_settings_commands_update_watchlist_pro_preferences(tmp_path):
     assert "absorption" in settings
 
 
+def test_handle_settings_commands_validate_inputs_in_russian(tmp_path):
+    store = WatchlistStore(tmp_path / "signals.sqlite3")
+
+    quiet = asyncio.run(handle_command("/quiet 25:99 07:00", FakeProvider(), store=store, chat_id=123))
+    types = asyncio.run(handle_command("/types typo", FakeProvider(), store=store, chat_id=123))
+
+    assert "Неверный формат времени" in quiet
+    assert "Неизвестный тип автосигнала" in types
+
+
 def test_handle_heatmap_mega_digest_futoi_stats_and_channel_commands_are_russian(tmp_path):
     store = WatchlistStore(tmp_path / "signals.sqlite3")
     provider = FakeProvider()
@@ -186,3 +197,16 @@ def test_handle_portfolio_commands_persist_and_report_risk(tmp_path):
     assert "ROSN" in listed
     assert "Риск портфеля" in risk
     assert "ROSN удален" in removed
+
+
+def test_handle_portfolio_risk_uses_chat_score_threshold(tmp_path):
+    store = WatchlistStore(tmp_path / "signals.sqlite3")
+    provider = FakeProvider()
+    asyncio.run(handle_command("/portfolio_add rosn", provider, store=store, chat_id=123))
+    asyncio.run(handle_command("/score 100", provider, store=store, chat_id=123))
+
+    risk = asyncio.run(
+        handle_command("/portfolio_risk", provider, store=store, chat_id=123, today=dt.date(2026, 6, 18))
+    )
+
+    assert "Рисковых тикеров: 0" in risk

@@ -6,6 +6,7 @@ from typing import Any, Protocol
 
 from .formatters import format_signal_report
 from .signals import (
+    SignalFeatures,
     SignalReport,
     TradeState,
     classify_from_days,
@@ -63,6 +64,7 @@ def build_signal_report(
             reclaim=None,
             reasons=("Нет данных TradeStats для расчета.",),
             signal_key=f"{ticker}:no-data",
+            features=SignalFeatures(),
         )
 
     latest = days[-1]
@@ -73,6 +75,13 @@ def build_signal_report(
     high_alerts = _count_alerts(alert_rows, "high")
     order_bias = _order_bias(order_rows)
     bbo_imbalance = _number(latest_book, "imbalance_val_bbo") if latest_book else 0.0
+    features = SignalFeatures(
+        low_alerts=low_alerts,
+        high_alerts=high_alerts,
+        megaalert_count=len(alert_rows),
+        order_bias=order_bias,
+        bbo_imbalance=bbo_imbalance,
+    )
 
     score, reasons = _score_signal(
         state=state,
@@ -110,6 +119,7 @@ def build_signal_report(
         reclaim=reclaim,
         reasons=tuple(reasons),
         signal_key=signal_key,
+        features=features,
     )
 
 
@@ -155,23 +165,27 @@ async def run_scan_once(
 ) -> int:
     now = _normalize_datetime(now)
     due_items = store.list_due(now)
-    reports = {
-        report.ticker: report
-        for report in await scan_tickers(provider, [item.ticker for item in due_items], today=today or now.date())
-    }
-
-    sent = 0
+    eligible: list[tuple] = []
     for item in due_items:
-        report = reports.get(item.ticker)
-        if report is None:
-            store.mark_checked(item.chat_id, item.ticker, now)
-            continue
         if store.is_muted(item, now):
             store.mark_checked(item.chat_id, item.ticker, now)
             continue
         settings = store.get_settings(item.chat_id)
         threshold = max(min_score, settings.min_score)
         if _is_quiet_time(settings.quiet_start, settings.quiet_end, now):
+            store.mark_checked(item.chat_id, item.ticker, now)
+            continue
+        eligible.append((item, settings, threshold))
+
+    reports = {
+        report.ticker: report
+        for report in await scan_tickers(provider, [item.ticker for item, _, _ in eligible], today=today or now.date())
+    }
+
+    sent = 0
+    for item, settings, threshold in eligible:
+        report = reports.get(item.ticker)
+        if report is None:
             store.mark_checked(item.chat_id, item.ticker, now)
             continue
         if settings.alert_types and report.alert_type not in settings.alert_types:

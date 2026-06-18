@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from .analytics import FlowStatistics, HeatmapEntry, MegaAlertSummary
+from .commands import COMMAND_SPECS
 from .futoi import FutoiSummary
 from .portfolio import PortfolioRisk
 from .signals import DayFlow, FlowSummary, SignalReport, TradeState
-from .storage import ChatSettings, WatchItem
+from .storage import ALLOWED_ALERT_TYPES, ChatSettings, WatchItem
 
 
 def format_percent(value: float) -> str:
@@ -174,13 +175,13 @@ def format_futoi_summary(summary: FutoiSummary) -> str:
         f"Время: {summary.tradedate} {summary.tradetime}",
         f"Лонги: {summary.total_long:,.0f}".replace(",", " "),
         f"Шорты: {summary.total_short:,.0f}".replace(",", " "),
-        f"Net: {summary.net:+,.0f}".replace(",", " "),
+        f"Нетто: {summary.net:+,.0f}".replace(",", " "),
         "",
         "Группы:",
     ]
     for group in summary.groups:
         lines.append(
-            f"{group.client_group}: long {group.long:,.0f}, short {group.short:,.0f}, net {group.net:+,.0f}".replace(
+            (f"{group.client_group}: лонг {group.long:,.0f}, шорт {group.short:,.0f}, нетто {group.net:+,.0f}").replace(
                 ",", " "
             )
         )
@@ -191,7 +192,7 @@ def format_flow_statistics(stats: FlowStatistics) -> str:
     return "\n".join(
         [
             f"Статистика {stats.ticker}",
-            f"Состояние: {stats.state_title}",
+            f"Текущее состояние: {stats.state_title}",
             f"Похожих случаев: {stats.samples}",
             f"После этого рост: {stats.up_after}",
             f"После этого снижение: {stats.down_after}",
@@ -281,66 +282,80 @@ def format_full_report(
 
 
 def format_quote_report(ticker: str, quote: dict) -> str:
-    return "\n".join(
-        [
-            f"Котировка {ticker}",
-            f"Последняя цена: {format_price(_optional_float(quote.get('last')))}",
-            f"Изменение к предыдущей: {_format_optional_percent(quote.get('last_to_prev_pct'))}",
-            f"Время: {quote.get('time') or 'н/д'}",
-        ]
-    )
+    lines = [
+        f"Котировка {ticker}",
+        f"Последняя цена: {format_price(_optional_float(quote.get('last')))}",
+        f"Изменение к предыдущей: {_format_optional_percent(quote.get('last_to_prev_pct'))}",
+    ]
+    bid = _optional_float(quote.get("bid"))
+    offer = _optional_float(quote.get("offer"))
+    if bid is not None or offer is not None:
+        lines.append(f"Спрос/предложение: {format_price(bid)} / {format_price(offer)}")
+    lines.append(f"Время: {quote.get('time') or 'н/д'}")
+    return "\n".join(lines)
 
 
 def format_help() -> str:
-    return "\n".join(
+    lines = ["Команды на русском:"]
+    sections = tuple(dict.fromkeys(spec.section for spec in COMMAND_SPECS))
+    for section in sections:
+        lines.extend(["", f"{section}:"])
+        lines.extend(f"{spec.usage} - {spec.description}" for spec in COMMAND_SPECS if spec.section == section)
+    lines.extend(
         [
-            "Команды на русском:",
             "",
-            "Быстрый анализ:",
-            "/quote ROSN - текущая котировка",
-            "/flow ROSN 7 - покупательная/продавцовая сила за N дней",
-            "/strategy ROSN - торговый сценарий по потоку сделок",
-            "/signal ROSN - скоринговый сигнал по TradeStats, OrderStats, OBStats и MegaAlert",
-            "/full ROSN - полный отчет по тикеру",
-            "/book ROSN - краткий статус стакана",
-            "/orders ROSN - давление выставленных и снятых заявок",
-            "/alerts ROSN - аномальные события ALGOPACK",
-            "",
-            "Scanner Pro и рынок:",
-            "/scan ROSN SBER - быстрый сканер по нескольким тикерам",
-            "/heatmap ROSN SBER - тепловая карта: сила, поток, MegaAlert и тип сигнала",
-            "/mega ROSN - лента MegaAlert с типами аномалий и последними событиями",
-            "/digest ROSN SBER - краткий дайджест главных сигналов",
-            "/stats ROSN 30 - статистика похожих состояний на истории TradeStats",
-            "",
-            "Автосканер watchlist:",
-            "/watch ROSN 15m - добавить тикер в автосканер",
-            "/unwatch ROSN - удалить тикер из автосканера",
-            "/watchlist - показать автосканер",
-            "/mute ROSN 60 - поставить автосигналы на паузу на N минут",
-            "/settings - настройки автосканера",
-            "/score 70 - минимальная сила автосигнала",
-            "/quiet 23:00 07:00 - тихие часы",
-            "/types sell_pressure absorption - фильтр типов автосигналов",
-            "",
-            "Фьючерсы и FUTOI:",
-            "/futoi SBERF - открытый интерес по фьючерсу",
-            "",
-            "Портфель:",
-            "/portfolio_add ROSN - добавить бумагу в портфель",
-            "/portfolio_remove ROSN - удалить бумагу из портфеля",
-            "/portfolio - показать портфель",
-            "/portfolio_risk - риск портфеля",
-            "",
-            "Каналы:",
-            "/channel_signal ROSN - короткий сигнал для канала",
-            "",
-            "Типы сигналов: sell_pressure, absorption, bullish_reversal, weak_bounce, "
-            "breakdown, reclaim, megaalert_cluster.",
+            "Типы сигналов: " + ", ".join(ALLOWED_ALERT_TYPES) + ".",
             "По умолчанию тикеры читаются на рынке акций MOEX TQBR; FUTOI работает по фьючерсам.",
             "Бот показывает аналитику по данным MOEX/ALGOPACK и не является инвестиционной рекомендацией.",
         ]
     )
+    return "\n".join(lines)
+
+
+def format_latest_book(ticker: str, rows: list[dict]) -> str:
+    if not rows:
+        return f"Нет данных OBStats по {ticker}."
+    latest = sorted(rows, key=lambda row: (str(row.get("tradedate") or ""), str(row.get("tradetime") or "")))[-1]
+    return "\n".join(
+        [
+            f"Стакан {ticker}",
+            f"Время: {latest.get('tradedate')} {latest.get('tradetime')}",
+            f"Дисбаланс всего: {float(latest.get('imbalance_val') or 0):+.2f}",
+            f"Дисбаланс BBO: {float(latest.get('imbalance_val_bbo') or 0):+.2f}",
+            f"Спред BBO: {float(latest.get('spread_bbo') or 0):.1f}",
+        ]
+    )
+
+
+def format_order_pressure(ticker: str, rows: list[dict]) -> str:
+    if not rows:
+        return f"Нет данных OrderStats по {ticker}."
+    put_buy = sum(float(row.get("put_val_b") or 0) for row in rows)
+    put_sell = sum(float(row.get("put_val_s") or 0) for row in rows)
+    cancel_buy = sum(float(row.get("cancel_val_b") or 0) for row in rows)
+    cancel_sell = sum(float(row.get("cancel_val_s") or 0) for row in rows)
+    return "\n".join(
+        [
+            f"Заявки {ticker}",
+            f"Выставлено покупок: {put_buy / 1_000_000_000:.2f} млрд ₽",
+            f"Выставлено продаж: {put_sell / 1_000_000_000:.2f} млрд ₽",
+            f"Снято покупок: {cancel_buy / 1_000_000_000:.2f} млрд ₽",
+            f"Снято продаж: {cancel_sell / 1_000_000_000:.2f} млрд ₽",
+        ]
+    )
+
+
+def format_alerts(ticker: str, rows: list[dict]) -> str:
+    if not rows:
+        return f"Нет MegaAlert по {ticker} за выбранный период."
+    counts: dict[str, int] = {}
+    for row in rows:
+        key = str(row.get("alert_type") or "unknown")
+        counts[key] = counts.get(key, 0) + 1
+    lines = [f"MegaAlert {ticker}", f"Всего событий: {len(rows)}"]
+    for key, count in sorted(counts.items(), key=lambda item: item[1], reverse=True)[:6]:
+        lines.append(f"{key}: {count}")
+    return "\n".join(lines)
 
 
 def _sum_flows(flows) -> FlowSummary:

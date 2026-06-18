@@ -50,7 +50,7 @@ def test_summarize_mega_alerts_counts_types_and_latest_rows():
     assert summary.latest[0]["tradetime"] == "10:06:00"
 
 
-def test_build_flow_statistics_counts_next_day_outcomes_for_same_state():
+def test_build_flow_statistics_counts_next_day_outcomes_for_latest_state():
     stats = build_flow_statistics(
         "ROSN",
         [
@@ -78,13 +78,21 @@ def test_build_flow_statistics_counts_next_day_outcomes_for_same_state():
                 "val_b": 80,
                 "val_s": 20,
             },
+            {
+                "tradedate": "2026-06-18",
+                "tradetime": "10:00:00",
+                "pr_open": 96,
+                "pr_close": 95,
+                "val_b": 80,
+                "val_s": 20,
+            },
         ],
     )
 
     assert stats.ticker == "ROSN"
-    assert stats.state_code == "sell_pressure"
-    assert stats.samples == 2
-    assert stats.down_after == 2
+    assert stats.state_code == "absorption"
+    assert stats.samples == 1
+    assert stats.down_after == 1
     assert stats.up_after == 0
 
 

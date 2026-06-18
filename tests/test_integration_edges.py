@@ -1,5 +1,6 @@
 import asyncio
 
+from moex_signal_bot.__main__ import _user_error_message
 from moex_signal_bot.config import load_dotenv_values, require_env
 from moex_signal_bot.moex_provider import MoexProvider
 from moex_signal_bot.telegram_client import TelegramClient
@@ -73,6 +74,55 @@ def test_moex_provider_fetches_native_futoi_rows():
     assert rows == [{"ticker": "SBERF", "pos_long": 100, "pos_short": 80}]
 
 
+def test_moex_provider_quote_prefers_marketdata_snapshot():
+    class FakeSession:
+        TOKEN = None
+
+    class FakeMarket:
+        def marketdata(self, *fields, native):
+            assert "last" in fields
+            assert native is True
+            return [
+                {
+                    "ticker": "SBER",
+                    "last": 310,
+                    "bid": 309.9,
+                    "offer": 310.1,
+                    "lasttoprevprice": 0.4,
+                    "updatetime": "10:05:00",
+                },
+                {
+                    "ticker": "ROSN",
+                    "last": 328.5,
+                    "bid": 328.4,
+                    "offer": 328.6,
+                    "lasttoprevprice": -2.1,
+                    "updatetime": "10:06:00",
+                },
+            ]
+
+    class FakeTicker:
+        def __init__(self, ticker):
+            self.ticker = ticker
+            self.market = FakeMarket()
+
+        def candles(self, **kwargs):
+            raise AssertionError("quote must prefer marketdata over candles")
+
+    provider = MoexProvider(api_key=None, ticker_factory=FakeTicker, session_module=FakeSession)
+
+    quote = asyncio.run(provider.quote("rosn"))
+
+    assert quote == {
+        "ticker": "ROSN",
+        "last": 328.5,
+        "bid": 328.4,
+        "offer": 328.6,
+        "last_to_prev_pct": -2.1,
+        "time": "10:06:00",
+    }
+
+
 def test_telegram_client_posts_send_message_payload():
     class FakeResponse:
         def raise_for_status(self):
@@ -100,3 +150,11 @@ def test_telegram_client_posts_send_message_payload():
             {"chat_id": 123, "text": "Привет", "disable_web_page_preview": True},
         )
     ]
+
+
+def test_user_error_message_hides_internal_exception_details():
+    message = _user_error_message(RuntimeError("Bearer token rejected for https://example.invalid"))
+
+    assert "Bearer token" not in message
+    assert "https://example.invalid" not in message
+    assert "не удалось выполнить команду" in message
