@@ -1,5 +1,6 @@
 import asyncio
 import datetime as dt
+from zoneinfo import ZoneInfo
 
 from moex_signal_bot.bot import Command, handle_command, parse_command
 from moex_signal_bot.memory_storage import InMemoryWatchlistStore as WatchlistStore
@@ -60,6 +61,7 @@ def test_parse_command_defaults_to_russian_help_for_unknown_text():
     assert parse_command("/scan rosn sber").tickers == ("ROSN", "SBER")
     assert parse_command("/watch rosn 5m").minutes == 5
     assert parse_command("/heatmap rosn sber").tickers == ("ROSN", "SBER")
+    assert parse_command("/marketflow rosn sber").tickers == ("ROSN", "SBER")
     assert parse_command("/score 75").args == ("75",)
     assert parse_command("/stats rosn").days == 30
     assert parse_command("что делать") == Command(name="help", ticker=None, days=1)
@@ -87,11 +89,96 @@ def test_handle_help_command_is_russian():
 
     assert "Команды" in text
     assert "/flow ROSN 7" in text
+    assert "/marketflow" in text
     assert "Scanner Pro" in text
     assert "FUTOI" in text
     assert "Портфель" in text
     assert "не является инвестиционной рекомендацией" in text
     assert "русском" in text
+
+
+def test_handle_marketflow_command_shows_last_two_hour_buy_sell_leaders():
+    class MarketFlowProvider(FakeProvider):
+        async def tradestats(self, ticker, start, end):
+            self.calls.append(("tradestats", ticker, start, end))
+            rows_by_ticker = {
+                "ROSN": [
+                    {
+                        "tradedate": "2026-06-18",
+                        "tradetime": "12:10:00",
+                        "pr_open": 101,
+                        "pr_close": 102,
+                        "val_b": 900_000_000,
+                        "val_s": 100_000_000,
+                    },
+                    {
+                        "tradedate": "2026-06-18",
+                        "tradetime": "12:30:00",
+                        "pr_open": 100,
+                        "pr_close": 104,
+                        "val_b": 200_000_000,
+                        "val_s": 50_000_000,
+                    },
+                    {
+                        "tradedate": "2026-06-18",
+                        "tradetime": "14:20:00",
+                        "pr_open": 104,
+                        "pr_close": 110,
+                        "val_b": 100_000_000,
+                        "val_s": 50_000_000,
+                    },
+                ],
+                "SBER": [
+                    {
+                        "tradedate": "2026-06-18",
+                        "tradetime": "12:30:00",
+                        "pr_open": 300,
+                        "pr_close": 297,
+                        "val_b": 100_000_000,
+                        "val_s": 300_000_000,
+                    },
+                    {
+                        "tradedate": "2026-06-18",
+                        "tradetime": "14:20:00",
+                        "pr_open": 297,
+                        "pr_close": 294,
+                        "val_b": 50_000_000,
+                        "val_s": 250_000_000,
+                    },
+                ],
+            }
+            return rows_by_ticker[ticker]
+
+        async def quote(self, ticker):
+            self.calls.append(("quote", ticker))
+            quotes = {
+                "ROSN": {"last": 110.0, "last_to_prev_pct": 1.25, "time": "14:20:00"},
+                "SBER": {"last": 294.0, "last_to_prev_pct": -1.1, "time": "14:20:00"},
+            }
+            return quotes[ticker]
+
+    provider = MarketFlowProvider()
+
+    text = asyncio.run(
+        handle_command(
+            "/marketflow rosn sber",
+            provider,
+            now=dt.datetime(2026, 6, 18, 14, 20, tzinfo=ZoneInfo("Europe/Moscow")),
+        )
+    )
+
+    assert "Поток MOEX за последние 2 часа" in text
+    assert "Окно: 12:20-14:20 MSK" in text
+    assert "Покупка: 450.0 млн ₽" in text
+    assert "Продажа: 650.0 млн ₽" in text
+    assert "ROSN" in text
+    assert "SBER" in text
+    assert "+200.0 млн ₽" in text
+    assert "-400.0 млн ₽" in text
+    assert "+50.0%" in text
+    assert "12:10:00" not in text
+    assert ("tradestats", "ROSN", "2026-06-18", "2026-06-18") in provider.calls
+    assert ("quote", "SBER") in provider.calls
 
 
 def test_handle_watchlist_commands_are_russian_and_persistent(tmp_path):

@@ -2,7 +2,7 @@
 
 Русскоязычный Telegram-бот для анализа российских акций на MOEX по данным `moexalgo` и ALGOPACK.
 
-Бот показывает котировки, покупательную и продавцовую силу, состояние стакана, давление заявок, события MegaAlert и скоринговые торговые сигналы. Также есть MOEX Flow Pro: автоматический Scanner Pro через Redis Streams и worker-процессы, расширенные настройки watchlist, FUTOI по фьючерсам, тепловая карта, портфельный риск, дайджест, простая статистика похожих состояний и короткий формат сигнала для Telegram-каналов.
+Бот показывает котировки, покупательную и продавцовую силу, состояние стакана, давление заявок, события MegaAlert и скоринговые торговые сигналы. Также есть MOEX Flow Pro: автоматический Scanner Pro через Redis Streams и worker-процессы, расширенные настройки watchlist, лидеры покупок/продаж за последние 2 часа, FUTOI по фьючерсам, тепловая карта, портфельный риск, дайджест, простая статистика похожих состояний и короткий формат сигнала для Telegram-каналов.
 
 Сигналы являются аналитикой по данным, а не инвестиционной рекомендацией.
 
@@ -17,6 +17,7 @@
 - Watchlist и автоматический сканер с хранением в PostgreSQL.
 - Redis Streams очередь с ACK/reclaim для фонового автосканера и горизонтального масштабирования scanner workers.
 - Настройки автосканера: минимальный score, тихие часы и фильтр типов сигналов.
+- Рыночный поток `/marketflow`: лидеры покупок/продаж по корзине тикеров за последние 2 часа.
 - Тепловая карта по тикерам и краткий рыночный дайджест.
 - FUTOI по фьючерсам MOEX.
 - Портфельный мониторинг риска.
@@ -35,6 +36,8 @@
 | `/strategy ROSN` | Базовый сценарий по потоку сделок. |
 | `/signal ROSN` | Скоринговый сигнал по `TradeStats`, `OrderStats`, `OBStats` и `MegaAlert`. |
 | `/scan ROSN SBER LKOH` | Быстрый сканер по нескольким тикерам. |
+| `/marketflow` | Лидеры покупок/продаж по корзине `DEFAULT_MARKETFLOW_TICKERS` за последние 2 часа. |
+| `/marketflow ROSN SBER` | То же самое по указанным тикерам. |
 | `/full ROSN` | Полный отчет по тикеру. |
 | `/book ROSN` | Краткий статус стакана по `OBStats`. |
 | `/orders ROSN` | Давление выставленных и снятых заявок по `OrderStats`. |
@@ -135,6 +138,7 @@ SCANNER_WORKER_POP_TIMEOUT_SECONDS=5
 SCANNER_MAX_ATTEMPTS=3
 SCANNER_RETRY_DELAY_SECONDS=5
 DEFAULT_SCAN_TICKERS=ROSN SBER GAZP LKOH TATN TATNP
+DEFAULT_MARKETFLOW_TICKERS=TATN PLZL OZON LKOH GMKN ROSN SBER VTBR NVTK T GAZP MOEX SNGS YDEX X5
 ```
 
 Можно использовать `MOEXALGO_API_KEY` вместо `MOEX_API_KEY`.
@@ -152,6 +156,7 @@ DEFAULT_SCAN_TICKERS=ROSN SBER GAZP LKOH TATN TATNP
 - `SCANNER_MAX_ATTEMPTS`: сколько повторных попыток делать для упавшей задачи.
 - `SCANNER_RETRY_DELAY_SECONDS`: пауза перед повторной постановкой упавшей задачи.
 - `DEFAULT_SCAN_TICKERS`: тикеры для `/heatmap`, `/mega` и `/digest`, если пользователь не указал список.
+- `DEFAULT_MARKETFLOW_TICKERS`: корзина тикеров для `/marketflow` без аргументов.
 
 Не коммитьте реальные токены, JWT, `.env`, дампы PostgreSQL и пользовательские данные.
 
@@ -171,6 +176,7 @@ python -m moex_signal_bot --dry-run "/help"
 python -m moex_signal_bot --dry-run "/flow ROSN 7"
 python -m moex_signal_bot --dry-run "/signal ROSN"
 python -m moex_signal_bot --dry-run "/scan ROSN SBER"
+python -m moex_signal_bot --dry-run "/marketflow ROSN SBER"
 python -m moex_signal_bot --dry-run "/heatmap ROSN SBER"
 python -m moex_signal_bot --dry-run "/futoi SBERF"
 ```

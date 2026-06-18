@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .analytics import FlowStatistics, HeatmapEntry, MegaAlertSummary
+from .analytics import FlowStatistics, HeatmapEntry, MarketFlowReport, MegaAlertSummary
 from .commands import COMMAND_SPECS
 from .futoi import FutoiSummary
 from .portfolio import PortfolioRisk
@@ -164,6 +164,39 @@ def format_digest(entries: list[HeatmapEntry]) -> str:
         lines.append(f"- {entry.ticker}: {entry.score}/100, {entry.state_title}, {entry.alert_type}")
     lines.append("")
     lines.append("Это аналитический обзор, не является инвестиционной рекомендацией.")
+    return "\n".join(lines)
+
+
+def format_market_flow_report(report: MarketFlowReport) -> str:
+    if not report.entries:
+        return "Поток MOEX: нет данных TradeStats за последние доступные 2 часа."
+
+    total = report.total_flow
+    lines = [
+        "Поток MOEX за последние 2 часа",
+        f"Окно: {report.window_start:%H:%M}-{report.window_end:%H:%M} MSK",
+        f"Покупка: {format_mrub(total.buy_value)}",
+        f"Продажа: {format_mrub(total.sell_value)}",
+        f"Нетто: {format_mrub(total.net_value, signed=True)}",
+        f"Дисбаланс: {format_percent(total.imbalance)}",
+        "",
+        "Тикер | Last | Chg% | Buy | Sell | Net | Power",
+    ]
+    for entry in report.entries:
+        lines.append(
+            " | ".join(
+                [
+                    entry.ticker,
+                    format_price(entry.last_price),
+                    _format_optional_percent(entry.last_to_prev_pct),
+                    format_mrub(entry.flow.buy_value),
+                    format_mrub(entry.flow.sell_value),
+                    format_mrub(entry.flow.net_value, signed=True),
+                    _format_signed_power(entry.flow.imbalance),
+                ]
+            )
+        )
+    lines.extend(["", _market_flow_read(total.imbalance), "Данные: ALGOPACK TradeStats val_b/val_s."])
     return "\n".join(lines)
 
 
@@ -385,6 +418,18 @@ def _optional_float(value) -> float | None:
 
 def _format_optional_percent(value) -> str:
     return "н/д" if value is None else f"{float(value):+.2f}%"
+
+
+def _format_signed_power(value: float) -> str:
+    return f"{value * 100:+.1f}%"
+
+
+def _market_flow_read(imbalance: float) -> str:
+    if imbalance >= 0.10:
+        return "Вывод: по корзине заметно доминируют покупатели."
+    if imbalance <= -0.10:
+        return "Вывод: по корзине заметно доминируют продавцы."
+    return "Вывод: по корзине нет сильного перекоса, рынок близок к нейтральному."
 
 
 def _format_direction(direction: str) -> str:

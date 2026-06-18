@@ -38,6 +38,12 @@ COMMAND_SPECS: tuple[CommandSpec, ...] = (
     CommandSpec("alerts", "/alerts ROSN", "аномальные события ALGOPACK", "Быстрый анализ"),
     CommandSpec("scan", "/scan ROSN SBER", "быстрый сканер по нескольким тикерам", "Scanner Pro и рынок"),
     CommandSpec(
+        "marketflow",
+        "/marketflow",
+        "лидеры покупок/продаж по корзине за последние 2 часа",
+        "Scanner Pro и рынок",
+    ),
+    CommandSpec(
         "heatmap",
         "/heatmap ROSN SBER",
         "тепловая карта: сила, поток, MegaAlert и тип сигнала",
@@ -67,7 +73,7 @@ COMMAND_SPECS: tuple[CommandSpec, ...] = (
 KNOWN_COMMANDS = {spec.name for spec in COMMAND_SPECS} | {"help"}
 NO_TICKER_COMMANDS = {"watchlist", "settings", "portfolio", "portfolio_risk"}
 ARG_COMMANDS = {"score", "quiet", "types"}
-MULTI_TICKER_COMMANDS = {"scan", "heatmap", "mega", "digest"}
+MULTI_TICKER_COMMANDS = {"scan", "heatmap", "mega", "digest", "marketflow"}
 ONE_TICKER_COMMANDS = {"portfolio_add", "portfolio_remove", "futoi", "channel_signal"}
 
 
@@ -136,4 +142,12 @@ def parse_score(value: str | None) -> int:
 
 def default_tickers() -> tuple[str, ...]:
     raw = os.environ.get("DEFAULT_SCAN_TICKERS", "ROSN SBER GAZP LKOH TATN TATNP")
+    return tuple(item.strip().upper() for item in raw.replace(",", " ").split() if item.strip())
+
+
+def default_marketflow_tickers() -> tuple[str, ...]:
+    raw = os.environ.get(
+        "DEFAULT_MARKETFLOW_TICKERS",
+        "TATN PLZL OZON LKOH GMKN ROSN SBER VTBR NVTK T GAZP MOEX SNGS YDEX X5",
+    )
     return tuple(item.strip().upper() for item in raw.replace(",", " ").split() if item.strip())

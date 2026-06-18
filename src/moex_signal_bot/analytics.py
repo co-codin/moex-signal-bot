@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import datetime as dt
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
+from zoneinfo import ZoneInfo
 
-from .signals import SignalReport, classify_from_days, summarize_daily_flow
+from .signals import FlowSummary, SignalReport, classify_from_days, summarize_daily_flow, summarize_flow
+
+MSK = ZoneInfo("Europe/Moscow")
 
 
 @dataclass(frozen=True)
@@ -39,6 +43,34 @@ class FlowStatistics:
     flat_after: int
 
 
+@dataclass(frozen=True)
+class MarketFlowEntry:
+    ticker: str
+    flow: FlowSummary
+    last_price: float | None
+    last_to_prev_pct: float | None
+    latest_time: str
+    buckets: int
+
+
+@dataclass(frozen=True)
+class MarketFlowReport:
+    window_start: dt.datetime
+    window_end: dt.datetime
+    entries: tuple[MarketFlowEntry, ...]
+
+    @property
+    def total_flow(self) -> FlowSummary:
+        return FlowSummary(
+            buy_value=sum(entry.flow.buy_value for entry in self.entries),
+            sell_value=sum(entry.flow.sell_value for entry in self.entries),
+            buy_volume=sum(entry.flow.buy_volume for entry in self.entries),
+            sell_volume=sum(entry.flow.sell_volume for entry in self.entries),
+            buy_trades=sum(entry.flow.buy_trades for entry in self.entries),
+            sell_trades=sum(entry.flow.sell_trades for entry in self.entries),
+        )
+
+
 def build_heatmap(reports: Iterable[SignalReport], *, limit: int = 10) -> list[HeatmapEntry]:
     entries = [
         HeatmapEntry(
@@ -54,6 +86,54 @@ def build_heatmap(reports: Iterable[SignalReport], *, limit: int = 10) -> list[H
         for report in reports
     ]
     return sorted(entries, key=lambda item: (item.score, item.megaalerts, item.ticker), reverse=True)[:limit]
+
+
+def build_market_flow_report(
+    rows_by_ticker: Mapping[str, Iterable[Mapping[str, Any]]],
+    *,
+    quotes: Mapping[str, Mapping[str, Any]] | None = None,
+    now: dt.datetime | None = None,
+    window_hours: int = 2,
+    limit: int = 15,
+) -> MarketFlowReport:
+    quotes = quotes or {}
+    now_msk = _to_msk(now or dt.datetime.now(MSK))
+    parsed_rows: dict[str, list[tuple[dt.datetime, Mapping[str, Any]]]] = {}
+    all_times: list[dt.datetime] = []
+    for ticker, rows in rows_by_ticker.items():
+        parsed: list[tuple[dt.datetime, Mapping[str, Any]]] = []
+        for row in rows:
+            traded_at = _trade_datetime(row)
+            if traded_at is None:
+                continue
+            parsed.append((traded_at, row))
+            all_times.append(traded_at)
+        parsed_rows[ticker.upper()] = sorted(parsed, key=lambda item: item[0])
+
+    available_times = [traded_at for traded_at in all_times if traded_at <= now_msk]
+    window_end = max(available_times or all_times or [now_msk])
+    window_start = window_end - dt.timedelta(hours=max(1, window_hours))
+    entries: list[MarketFlowEntry] = []
+
+    for ticker, parsed in parsed_rows.items():
+        window_rows = [row for traded_at, row in parsed if window_start <= traded_at <= window_end]
+        if not window_rows:
+            continue
+        latest = window_rows[-1]
+        quote = quotes.get(ticker) or {}
+        entries.append(
+            MarketFlowEntry(
+                ticker=ticker,
+                flow=summarize_flow(window_rows),
+                last_price=_optional_number(quote.get("last"), fallback=_optional_number(latest.get("pr_close"))),
+                last_to_prev_pct=_optional_number(quote.get("last_to_prev_pct")),
+                latest_time=str(latest.get("tradetime") or ""),
+                buckets=len(window_rows),
+            )
+        )
+
+    sorted_entries = sorted(entries, key=lambda item: (item.flow.imbalance, item.flow.net_value), reverse=True)[:limit]
+    return MarketFlowReport(window_start=window_start, window_end=window_end, entries=tuple(sorted_entries))
 
 
 def summarize_mega_alerts(
@@ -105,3 +185,29 @@ def build_flow_statistics(ticker: str, rows: Iterable[Mapping[str, Any]]) -> Flo
         down_after=down_after,
         flat_after=flat_after,
     )
+
+
+def _trade_datetime(row: Mapping[str, Any]) -> dt.datetime | None:
+    tradedate = row.get("tradedate")
+    tradetime = row.get("tradetime")
+    if not tradedate or not tradetime:
+        return None
+    try:
+        return dt.datetime.fromisoformat(f"{tradedate}T{tradetime}").replace(tzinfo=MSK)
+    except ValueError:
+        return None
+
+
+def _to_msk(value: dt.datetime) -> dt.datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=MSK)
+    return value.astimezone(MSK)
+
+
+def _optional_number(value: Any, *, fallback: float | None = None) -> float | None:
+    if value is None:
+        return fallback
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return fallback

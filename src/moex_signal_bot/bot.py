@@ -3,8 +3,8 @@ from __future__ import annotations
 import datetime as dt
 from typing import Protocol
 
-from .analytics import build_flow_statistics, build_heatmap, summarize_mega_alerts
-from .commands import Command, default_tickers, parse_command, parse_score
+from .analytics import build_flow_statistics, build_heatmap, build_market_flow_report, summarize_mega_alerts
+from .commands import Command, default_marketflow_tickers, default_tickers, parse_command, parse_score
 from .formatters import (
     format_alerts,
     format_channel_signal,
@@ -16,6 +16,7 @@ from .formatters import (
     format_heatmap,
     format_help,
     format_latest_book,
+    format_market_flow_report,
     format_mega_alert_summaries,
     format_order_pressure,
     format_portfolio,
@@ -111,6 +112,8 @@ async def handle_command(
     if not command.ticker:
         if command.name in {"heatmap", "mega", "digest"}:
             command = Command(name=command.name, ticker=None, tickers=default_tickers())
+        elif command.name == "marketflow":
+            command = Command(name=command.name, ticker=None, tickers=default_marketflow_tickers())
         else:
             return format_help()
 
@@ -193,6 +196,13 @@ async def handle_command(
     if command.name == "digest":
         reports = await scan_tickers(provider, command.tickers or default_tickers(), today=end)
         return format_digest(build_heatmap(reports))
+
+    if command.name == "marketflow":
+        tickers = command.tickers or default_marketflow_tickers()
+        rows_by_ticker = {ticker: await provider.tradestats(ticker, end_s, end_s) for ticker in tickers}
+        quotes = {ticker: await provider.quote(ticker) for ticker in tickers}
+        report = build_market_flow_report(rows_by_ticker, quotes=quotes, now=now)
+        return format_market_flow_report(report)
 
     if command.name == "futoi":
         rows = await provider.futoi(command.ticker, start_s, end_s)
