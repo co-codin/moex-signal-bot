@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from .signals import DayFlow, FlowSummary, TradeState
+from .signals import DayFlow, FlowSummary, SignalReport, TradeState
+from .storage import WatchItem
 
 
 def format_percent(value: float) -> str:
@@ -60,6 +61,83 @@ def format_strategy_report(ticker: str, state: TradeState, *, support: float | N
     )
 
 
+def format_signal_report(report: SignalReport, *, automatic: bool = False) -> str:
+    title = "Автосигнал" if automatic else "Сигнал"
+    lines = [
+        f"{title} {report.ticker}",
+        f"Сила: {report.score}/100",
+        f"Состояние: {report.state.title}",
+        f"Направление: {_format_direction(report.direction)}",
+        f"Время: {_format_signal_time(report)}",
+        f"Цена за день: {report.price_change:+.2f}%",
+        f"Покупатели: {format_percent(report.buy_power)}, продавцы: {format_percent(report.sell_power)}",
+        f"Поддержка: {format_price(report.support)}",
+        f"Возврат контроля: {format_price(report.reclaim)}",
+        "",
+        "Причины:",
+    ]
+    lines.extend(f"- {reason}" for reason in report.reasons[:6])
+    lines.extend(
+        [
+            "",
+            f"План: {report.state.action}",
+            "Это аналитический сигнал, не является инвестиционной рекомендацией.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def format_scan_results(reports: list[SignalReport]) -> str:
+    if not reports:
+        return "Сканер: нет тикеров для проверки."
+
+    lines = ["Сканер", ""]
+    for report in sorted(reports, key=lambda item: item.score, reverse=True):
+        lines.append(
+            " | ".join(
+                [
+                    report.ticker,
+                    f"{report.score}/100",
+                    report.state.title,
+                    _format_direction(report.direction),
+                ]
+            )
+        )
+    lines.extend(["", "Сильные автосигналы отправляются только по watchlist и с дедупликацией."])
+    return "\n".join(lines)
+
+
+def format_watchlist(items: list[WatchItem]) -> str:
+    if not items:
+        return "Watchlist пуст. Добавьте тикер командой /watch ROSN 15m."
+    lines = ["Watchlist"]
+    for item in items:
+        muted = f", пауза до {item.muted_until:%Y-%m-%d %H:%M UTC}" if item.muted_until else ""
+        lines.append(f"{item.ticker}: каждые {item.interval_minutes} мин{muted}")
+    return "\n".join(lines)
+
+
+def format_full_report(
+    ticker: str,
+    *,
+    quote: str,
+    signal: str,
+    book: str,
+    orders: str,
+    alerts: str,
+) -> str:
+    return "\n\n".join(
+        [
+            f"Полный отчет {ticker}",
+            quote,
+            signal,
+            book,
+            orders,
+            alerts,
+        ]
+    )
+
+
 def format_quote_report(ticker: str, quote: dict) -> str:
     return "\n".join(
         [
@@ -78,9 +156,16 @@ def format_help() -> str:
             "/quote ROSN - текущая котировка",
             "/flow ROSN 7 - покупательная/продавцовая сила за N дней",
             "/strategy ROSN - торговый сценарий по потоку сделок",
+            "/signal ROSN - скоринговый сигнал по TradeStats, OrderStats, OBStats и MegaAlert",
+            "/scan ROSN SBER - быстрый сканер по нескольким тикерам",
+            "/full ROSN - полный отчет по тикеру",
             "/book ROSN - краткий статус стакана",
             "/orders ROSN - давление выставленных и снятых заявок",
             "/alerts ROSN - аномальные события ALGOPACK",
+            "/watch ROSN 15m - добавить тикер в автосканер",
+            "/unwatch ROSN - удалить тикер из автосканера",
+            "/watchlist - показать автосканер",
+            "/mute ROSN 60 - поставить автосигналы на паузу на N минут",
             "",
             "По умолчанию тикеры читаются на рынке акций MOEX TQBR.",
         ]
@@ -114,3 +199,21 @@ def _optional_float(value) -> float | None:
 
 def _format_optional_percent(value) -> str:
     return "н/д" if value is None else f"{float(value):+.2f}%"
+
+
+def _format_direction(direction: str) -> str:
+    return {
+        "short": "риск снижения",
+        "watch_long": "наблюдать лонг после подтверждения",
+        "long": "риск роста",
+        "caution": "осторожно, отскок слабый",
+        "neutral": "нейтрально",
+    }.get(direction, direction)
+
+
+def _format_signal_time(report: SignalReport) -> str:
+    if not report.latest_date:
+        return "н/д"
+    if not report.latest_time:
+        return report.latest_date
+    return f"{report.latest_date} {report.latest_time}"

@@ -4,8 +4,19 @@ import datetime as dt
 from dataclasses import dataclass
 from typing import Protocol
 
-from .formatters import format_flow_report, format_help, format_quote_report, format_strategy_report
+from .formatters import (
+    format_flow_report,
+    format_full_report,
+    format_help,
+    format_quote_report,
+    format_scan_results,
+    format_signal_report,
+    format_strategy_report,
+    format_watchlist,
+)
+from .scanner import build_signal_report, scan_tickers
 from .signals import classify_from_days, summarize_daily_flow
+from .storage import WatchlistStore
 
 
 @dataclass(frozen=True)
@@ -13,6 +24,8 @@ class Command:
     name: str
     ticker: str | None
     days: int = 1
+    tickers: tuple[str, ...] = ()
+    minutes: int | None = None
 
 
 class MarketProvider(Protocol):
@@ -35,12 +48,40 @@ def parse_command(text: str) -> Command:
     name = parts[0].removeprefix("/").split("@", 1)[0].lower()
     if name == "start":
         name = "help"
-    if name not in {"help", "quote", "flow", "strategy", "book", "orders", "alerts"}:
+    if name not in {
+        "help",
+        "quote",
+        "flow",
+        "strategy",
+        "book",
+        "orders",
+        "alerts",
+        "signal",
+        "scan",
+        "full",
+        "watch",
+        "unwatch",
+        "watchlist",
+        "mute",
+    }:
         return Command(name="help", ticker=None, days=1)
 
+    if name == "watchlist":
+        return Command(name=name, ticker=None)
+
     ticker = parts[1].upper() if len(parts) >= 2 else None
+    tickers = tuple(part.upper() for part in parts[1:] if not part.startswith("/"))
+    minutes = None
     days = 7 if name == "strategy" else 1
-    if len(parts) >= 3:
+    if name == "scan":
+        return Command(name=name, ticker=ticker, tickers=tickers)
+    if name == "watch":
+        minutes = _parse_minutes(parts[2] if len(parts) >= 3 else None, default=15)
+        return Command(name=name, ticker=ticker, minutes=minutes)
+    if name == "mute":
+        minutes = _parse_minutes(parts[2] if len(parts) >= 3 else None, default=60)
+        return Command(name=name, ticker=ticker, minutes=minutes)
+    if len(parts) >= 3 and name in {"flow", "strategy"}:
         try:
             days = max(1, min(30, int(parts[2])))
         except ValueError:
@@ -48,12 +89,50 @@ def parse_command(text: str) -> Command:
     return Command(name=name, ticker=ticker, days=days)
 
 
-async def handle_command(text: str, provider: MarketProvider) -> str:
+async def handle_command(
+    text: str,
+    provider: MarketProvider,
+    *,
+    store: WatchlistStore | None = None,
+    chat_id: int | None = None,
+    now: dt.datetime | None = None,
+    today: dt.date | None = None,
+) -> str:
     command = parse_command(text)
-    if command.name == "help" or not command.ticker:
+    now = _normalize_datetime(now)
+    if command.name == "help":
+        return format_help()
+    if command.name in {"watchlist"}:
+        if store is None or chat_id is None:
+            return "Watchlist недоступен: нет локального хранилища или chat_id."
+        return format_watchlist(store.list_watch(chat_id))
+    if not command.ticker:
         return format_help()
 
-    end = dt.date.today()
+    if command.name == "watch":
+        if store is None or chat_id is None:
+            return "Автосканер недоступен: нет локального хранилища или chat_id."
+        minutes = command.minutes or 15
+        store.add_watch(chat_id, command.ticker, interval_minutes=minutes, now=now)
+        return f"{command.ticker} добавлен в автосканер. Интервал: {minutes} мин."
+
+    if command.name == "unwatch":
+        if store is None or chat_id is None:
+            return "Автосканер недоступен: нет локального хранилища или chat_id."
+        removed = store.remove_watch(chat_id, command.ticker)
+        if removed:
+            return f"{command.ticker} удален из автосканера."
+        return f"{command.ticker} не найден в watchlist."
+
+    if command.name == "mute":
+        if store is None or chat_id is None:
+            return "Автосканер недоступен: нет локального хранилища или chat_id."
+        minutes = command.minutes or 60
+        muted_until = now + dt.timedelta(minutes=minutes)
+        store.mute(chat_id, command.ticker, muted_until)
+        return f"Пауза для {command.ticker}: {minutes} мин."
+
+    end = today or dt.date.today()
     start = end - dt.timedelta(days=command.days - 1)
     start_s = start.isoformat()
     end_s = end.isoformat()
@@ -73,6 +152,29 @@ async def handle_command(text: str, provider: MarketProvider) -> str:
         reclaim = max((day.open_price for day in days[-3:]), default=None) if days else None
         return format_strategy_report(command.ticker, state, support=support, reclaim=reclaim)
 
+    if command.name == "signal":
+        report = await _signal_report(provider, command.ticker, start_s, end_s)
+        return format_signal_report(report)
+
+    if command.name == "scan":
+        reports = await scan_tickers(provider, command.tickers or (command.ticker,), today=end)
+        return format_scan_results(reports)
+
+    if command.name == "full":
+        quote = format_quote_report(command.ticker, await provider.quote(command.ticker))
+        report = await _signal_report(provider, command.ticker, start_s, end_s)
+        book = _format_latest_book(command.ticker, await provider.obstats(command.ticker, start_s, end_s))
+        orders = _format_order_pressure(command.ticker, await provider.orderstats(command.ticker, start_s, end_s))
+        alerts = _format_alerts(command.ticker, await provider.alerts(command.ticker, start_s, end_s))
+        return format_full_report(
+            command.ticker,
+            quote=quote,
+            signal=format_signal_report(report),
+            book=book,
+            orders=orders,
+            alerts=alerts,
+        )
+
     if command.name == "book":
         rows = await provider.obstats(command.ticker, start_s, end_s)
         return _format_latest_book(command.ticker, rows)
@@ -86,6 +188,20 @@ async def handle_command(text: str, provider: MarketProvider) -> str:
         return _format_alerts(command.ticker, rows)
 
     return format_help()
+
+
+async def _signal_report(provider: MarketProvider, ticker: str, start: str, end: str):
+    tradestats = await provider.tradestats(ticker, start, end)
+    orderstats = await provider.orderstats(ticker, start, end)
+    obstats = await provider.obstats(ticker, start, end)
+    alerts = await provider.alerts(ticker, start, end)
+    return build_signal_report(
+        ticker,
+        tradestats=tradestats,
+        orderstats=orderstats,
+        obstats=obstats,
+        alerts=alerts,
+    )
 
 
 def _format_latest_book(ticker: str, rows: list[dict]) -> str:
@@ -132,3 +248,21 @@ def _format_alerts(ticker: str, rows: list[dict]) -> str:
     for key, count in sorted(counts.items(), key=lambda item: item[1], reverse=True)[:6]:
         lines.append(f"{key}: {count}")
     return "\n".join(lines)
+
+
+def _parse_minutes(value: str | None, *, default: int) -> int:
+    if not value:
+        return default
+    normalized = value.lower().removesuffix("m").removesuffix("м")
+    try:
+        return max(1, min(1440, int(normalized)))
+    except ValueError:
+        return default
+
+
+def _normalize_datetime(value: dt.datetime | None) -> dt.datetime:
+    if value is None:
+        return dt.datetime.now(dt.UTC)
+    if value.tzinfo is None:
+        return value.replace(tzinfo=dt.UTC)
+    return value.astimezone(dt.UTC)

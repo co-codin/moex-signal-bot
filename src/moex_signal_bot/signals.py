@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Iterable, Mapping, Any
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,24 @@ class TradeState:
     title: str
     description: str
     action: str
+
+
+@dataclass(frozen=True)
+class SignalReport:
+    ticker: str
+    state: TradeState
+    score: int
+    direction: str
+    latest_date: str
+    latest_time: str
+    price_change: float
+    flow_imbalance: float
+    buy_power: float
+    sell_power: float
+    support: float | None
+    reclaim: float | None
+    reasons: tuple[str, ...]
+    signal_key: str
 
 
 def _number(row: Mapping[str, Any], key: str) -> float:

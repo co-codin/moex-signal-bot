@@ -11,7 +11,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "pre-commit>=4",
     "pytest>=8",
+    "ruff>=0.8",
 ]
 
 [build-system]
@@ -25,3 +27,10 @@ packages = ["src/moex_signal_bot"]
 pythonpath = ["src"]
 testpaths = ["tests"]
 addopts = "-q"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "SIM", "UP"]

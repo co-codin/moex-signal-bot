@@ -1,0 +1,4 @@
+interface:
+  display_name: "MOEX Signal Bot"
+  short_description: "MOEX bot workflows and guardrails"
+  default_prompt: "Use $moex-signal-bot to modify or analyze the MOEX Telegram signal bot."

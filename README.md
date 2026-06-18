@@ -7,9 +7,16 @@
 - `/quote ROSN` - краткая котировка.
 - `/flow ROSN 7` - покупательная и продавцовая сила по `TradeStats`.
 - `/strategy ROSN` - сценарий: давление продавцов, абсорбция, разворот или нейтрально.
+- `/signal ROSN` - скоринговый сигнал по `TradeStats`, `OrderStats`, `OBStats` и `MegaAlert`.
+- `/scan ROSN SBER` - быстрый сканер по нескольким тикерам.
+- `/full ROSN` - полный отчет по тикеру.
 - `/book ROSN` - последние метрики стакана по `OBStats`.
 - `/orders ROSN` - давление выставленных и снятых заявок по `OrderStats`.
 - `/alerts ROSN` - события `MegaAlert`.
+- `/watch ROSN 15m` - добавить тикер в автоматический сканер.
+- `/unwatch ROSN` - удалить тикер из автоматического сканера.
+- `/watchlist` - показать тикеры автосканера.
+- `/mute ROSN 60` - поставить автосигналы по тикеру на паузу.
 
 Все ответы бота написаны на русском языке. Сигналы являются аналитикой по данным, а не инвестиционной рекомендацией.
 
@@ -20,9 +27,11 @@
 ```bash
 TELEGRAM_BOT_TOKEN=...
 MOEX_API_KEY=...
+MOEX_SIGNAL_DB=signals.sqlite3
+SCANNER_INTERVAL_SECONDS=60
 ```
 
-`MOEX_API_KEY` можно заменить на `MOEXALGO_API_KEY`.
+`MOEX_API_KEY` можно заменить на `MOEXALGO_API_KEY`. `MOEX_SIGNAL_DB` хранит watchlist и дедупликацию автосигналов.
 
 ## Запуск
 
@@ -40,6 +49,7 @@ python -m moex_signal_bot
 ```bash
 python -m moex_signal_bot --dry-run "/help"
 python -m moex_signal_bot --dry-run "/flow ROSN 7"
+python -m moex_signal_bot --dry-run "/signal ROSN"
 ```
 
 Если используется локальный checkout `moexalgo`, можно запускать без публикации пакета так:
@@ -66,8 +76,20 @@ imbalance = (val_b - val_s) / (val_b + val_s)
 - `Слабый отскок`: цена растет, но поток не подтверждает покупателей.
 - `Нейтрально`: явного преимущества нет.
 
+Автосканер отправляет сигнал только если скоринг достаточно сильный, тикер находится в watchlist, сигнал еще не отправлялся этому чату, и тикер не поставлен на паузу.
+
+## Docker
+
+```bash
+docker build -t moex-signal-bot .
+docker run --rm --env-file .env -v moex-signal-data:/data moex-signal-bot
+```
+
 ## Проверка
 
 ```bash
 python3 -m pytest -q
+ruff check .
+ruff format --check .
+pre-commit run --all-files
 ```

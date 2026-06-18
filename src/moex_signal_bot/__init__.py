@@ -1,2 +1,1 @@
 """MOEX signal Telegram bot."""
-
