@@ -3,6 +3,7 @@ from __future__ import annotations
 from .analytics import FlowStatistics, HeatmapEntry, MarketFlowReport, MegaAlertSummary
 from .commands import COMMAND_SPECS
 from .futoi import FutoiSummary
+from .options import OptionChainSummary, OptionTradeActivity
 from .portfolio import PortfolioRisk
 from .signals import DayFlow, FlowSummary, SignalReport, TradeState
 from .storage import ALLOWED_ALERT_TYPES, ChatSettings, WatchItem
@@ -221,6 +222,80 @@ def format_futoi_summary(summary: FutoiSummary) -> str:
     return "\n".join(lines)
 
 
+def format_option_chain(summary: OptionChainSummary) -> str:
+    if not summary.leaders:
+        return f"Опционная активность {summary.underlying}: нет данных по ROPD."
+    lines = [
+        f"Опционная активность {summary.underlying}",
+        f"Контрактов: {summary.total} | Call: {summary.calls} | Put: {summary.puts}",
+        f"Объем: {_format_quantity(summary.volume)}",
+        f"Оборот: {format_mrub(summary.turnover)}",
+        f"Открытый интерес: {_format_quantity(summary.open_interest)}",
+        "",
+        "Лидеры активности:",
+        "Тикер | Тип | Strike | Exp | Last | Vol | Turnover",
+    ]
+    for entry in summary.leaders:
+        lines.append(
+            " | ".join(
+                [
+                    entry.ticker,
+                    entry.option_type,
+                    format_price(entry.strike),
+                    entry.expiry,
+                    format_price(entry.last_price),
+                    _format_quantity(entry.volume),
+                    format_mrub(entry.turnover),
+                ]
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "Важно: это объем/оборот/OI по MOEX ISS options ROPD, не ALGOPACK buy/sell flow.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def format_option_contract(activity: OptionTradeActivity) -> str:
+    quote = activity.quote
+    lines = [
+        f"Опцион {activity.ticker}",
+        f"Last: {format_price(_optional_float(quote.get('last')))}",
+        f"Изменение: {_format_optional_percent(quote.get('last_to_prev_pct'))}",
+    ]
+    bid = _optional_float(quote.get("bid"))
+    offer = _optional_float(quote.get("offer"))
+    if bid is not None or offer is not None:
+        lines.append(f"Спрос/предложение: {format_price(bid)} / {format_price(offer)}")
+    lines.extend(
+        [
+            f"Время котировки: {quote.get('time') or 'н/д'}",
+            "",
+            "Raw trades сегодня:",
+            f"Сделок: {activity.trades_count}",
+            f"Объем: {_format_quantity(activity.volume)}",
+            f"Оборот: {format_mrub(activity.turnover)}",
+        ]
+    )
+    if activity.latest_trade:
+        latest = activity.latest_trade
+        price = _optional_float(latest.get("price") or latest.get("last"))
+        quantity = _optional_float(latest.get("quantity") or latest.get("qty") or latest.get("volume"))
+        lines.append(
+            f"Последняя сделка: {latest.get('tradetime') or latest.get('time') or 'н/д'} "
+            f"{format_price(price)} x {_format_quantity(quantity)}"
+        )
+    lines.extend(
+        [
+            "",
+            "Важно: raw trades не подтверждает сторону покупателя/продавца.",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def format_flow_statistics(stats: FlowStatistics) -> str:
     return "\n".join(
         [
@@ -418,6 +493,12 @@ def _optional_float(value) -> float | None:
 
 def _format_optional_percent(value) -> str:
     return "н/д" if value is None else f"{float(value):+.2f}%"
+
+
+def _format_quantity(value: float | None) -> str:
+    if value is None:
+        return "н/д"
+    return f"{value:,.0f}".replace(",", " ")
 
 
 def _format_signed_power(value: float) -> str:

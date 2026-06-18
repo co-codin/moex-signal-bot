@@ -2,7 +2,7 @@
 
 Русскоязычный Telegram-бот для анализа российских акций на MOEX по данным `moexalgo` и ALGOPACK.
 
-Бот показывает котировки, покупательную и продавцовую силу, состояние стакана, давление заявок, события MegaAlert и скоринговые торговые сигналы. Также есть MOEX Flow Pro: автоматический Scanner Pro через Redis Streams и worker-процессы, расширенные настройки watchlist, лидеры покупок/продаж за последние 2 часа, FUTOI по фьючерсам, тепловая карта, портфельный риск, дайджест, простая статистика похожих состояний и короткий формат сигнала для Telegram-каналов.
+Бот показывает котировки, покупательную и продавцовую силу, состояние стакана, давление заявок, события MegaAlert и скоринговые торговые сигналы. Также есть MOEX Flow Pro: автоматический Scanner Pro через Redis Streams и worker-процессы, расширенные настройки watchlist, лидеры покупок/продаж за последние 2 часа, FUTOI по фьючерсам, активность опционов ROPD, тепловая карта, портфельный риск, дайджест, простая статистика похожих состояний и короткий формат сигнала для Telegram-каналов.
 
 Сигналы являются аналитикой по данным, а не инвестиционной рекомендацией.
 
@@ -20,6 +20,7 @@
 - Рыночный поток `/marketflow`: лидеры покупок/продаж по корзине тикеров за последние 2 часа.
 - Тепловая карта по тикерам и краткий рыночный дайджест.
 - FUTOI по фьючерсам MOEX.
+- Активность опционов MOEX ROPD по базовому активу и отдельному контракту.
 - Портфельный мониторинг риска.
 - Канальный формат `MOEX Flow Alert`.
 - Дедупликация автосигналов, чтобы не спамить пользователя одинаковыми событиями.
@@ -46,6 +47,9 @@
 | `/mega ROSN` | Расширенная лента MegaAlert по одному или нескольким тикерам. |
 | `/digest ROSN SBER` | Краткий дайджест главных сигналов. |
 | `/stats ROSN 30` | Историческая статистика похожих состояний по `TradeStats`. |
+| `/optionflow SBER` | Активность опционов по базовому активу: объем, оборот, OI и лидеры контрактов. |
+| `/options SBER` | Алиас для `/optionflow`. |
+| `/option SR100CC0` | Снимок опционного контракта и raw trades. |
 | `/watch ROSN 15m` | Добавить тикер в автоматический сканер с интервалом 15 минут. |
 | `/unwatch ROSN` | Удалить тикер из автоматического сканера. |
 | `/watchlist` | Показать тикеры автосканера. |
@@ -61,7 +65,7 @@
 | `/portfolio_risk` | Проверить риск по портфелю. |
 | `/channel_signal ROSN` | Короткий сигнал для публикации в Telegram-канале. |
 
-Тикеры нормализуются в верхний регистр. По умолчанию бот рассчитан на рынок акций MOEX TQBR.
+Тикеры нормализуются в верхний регистр. По умолчанию бот рассчитан на рынок акций MOEX TQBR. Команды по опционам используют базовые данные MOEX ISS рынка `options`/ROPD и не показывают ALGOPACK buy/sell flow, потому что в `moexalgo` для опционов нет TradeStats/OrderStats/OBStats.
 
 ## Prompt Templates
 
@@ -179,6 +183,8 @@ python -m moex_signal_bot --dry-run "/scan ROSN SBER"
 python -m moex_signal_bot --dry-run "/marketflow ROSN SBER"
 python -m moex_signal_bot --dry-run "/heatmap ROSN SBER"
 python -m moex_signal_bot --dry-run "/futoi SBERF"
+python -m moex_signal_bot --dry-run "/optionflow SBER"
+python -m moex_signal_bot --dry-run "/option SR100CC0"
 ```
 
 Если используется локальный checkout `moexalgo`, можно добавить его в `PYTHONPATH`:
@@ -282,6 +288,7 @@ src/moex_signal_bot/
   scanner_queue.py    # Redis-очередь, scheduler jobs и worker processing
   analytics.py        # heatmap, MegaAlert feed, digest и статистика
   futoi.py            # агрегация открытого интереса FUTOI
+  options.py          # агрегация активности опционов ROPD
   portfolio.py        # риск портфеля
   storage.py          # PostgreSQL watchlist, настройки, портфель и дедупликация
   memory_storage.py   # in-memory store для тестов и dry-run без DATABASE_URL

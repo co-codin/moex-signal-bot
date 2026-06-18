@@ -18,6 +18,8 @@ from .formatters import (
     format_latest_book,
     format_market_flow_report,
     format_mega_alert_summaries,
+    format_option_chain,
+    format_option_contract,
     format_order_pressure,
     format_portfolio,
     format_portfolio_risk,
@@ -29,6 +31,7 @@ from .formatters import (
     format_watchlist,
 )
 from .futoi import summarize_futoi
+from .options import summarize_option_trades, summarize_options_chain
 from .portfolio import build_portfolio_risk
 from .scanner import build_signal_report, scan_tickers
 from .signals import classify_from_days, summarize_daily_flow
@@ -47,6 +50,12 @@ class MarketProvider(Protocol):
     async def futoi(self, ticker: str, start: str, end: str) -> list[dict]: ...
 
     async def quote(self, ticker: str) -> dict: ...
+
+    async def options_chain(self, underlying: str) -> list[dict]: ...
+
+    async def option_quote(self, ticker: str) -> dict: ...
+
+    async def option_trades(self, ticker: str) -> list[dict]: ...
 
 
 async def handle_command(
@@ -207,6 +216,15 @@ async def handle_command(
     if command.name == "futoi":
         rows = await provider.futoi(command.ticker, start_s, end_s)
         return format_futoi_summary(summarize_futoi(command.ticker, rows))
+
+    if command.name in {"optionflow", "options"}:
+        rows = await provider.options_chain(command.ticker)
+        return format_option_chain(summarize_options_chain(command.ticker, rows))
+
+    if command.name == "option":
+        quote = await provider.option_quote(command.ticker)
+        trades = await provider.option_trades(command.ticker)
+        return format_option_contract(summarize_option_trades(command.ticker, quote, trades))
 
     if command.name == "stats":
         rows = await provider.tradestats(command.ticker, start_s, end_s)

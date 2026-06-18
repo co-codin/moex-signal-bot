@@ -76,6 +76,67 @@ def test_moex_provider_fetches_native_futoi_rows():
     assert rows == [{"ticker": "SBERF", "pos_long": 100, "pos_short": 80}]
 
 
+def test_moex_provider_fetches_options_chain_from_options_market():
+    class FakeSession:
+        TOKEN = None
+
+    class FakeMarket:
+        def __init__(self, market):
+            self.market = market
+
+        def tickers(self, *fields, native):
+            assert self.market == "options"
+            assert fields == ("*",)
+            assert native is True
+            return [{"secid": "SBER6L26000BA5", "assetcode": "SBER", "strike": 26000}]
+
+        def marketdata(self, *fields, native):
+            assert fields == ("*",)
+            assert native is True
+            return [{"secid": "SBER6L26000BA5", "last": 210, "voltoday": 1200}]
+
+    provider = MoexProvider(
+        api_key=None,
+        ticker_factory=lambda ticker: None,
+        market_factory=FakeMarket,
+        session_module=FakeSession,
+    )
+
+    rows = asyncio.run(provider.options_chain("sber"))
+
+    assert rows == [{"secid": "SBER6L26000BA5", "assetcode": "SBER", "strike": 26000, "last": 210, "voltoday": 1200}]
+
+
+def test_moex_provider_fetches_option_quote_and_raw_trades():
+    class FakeSession:
+        TOKEN = None
+
+    class FakeMarket:
+        def marketdata(self, *fields, native):
+            assert "last" in fields
+            assert native is True
+            return [{"secid": "SBER6L26000BA5", "last": 210, "bid": 205, "offer": 215, "lasttoprevprice": 4.2}]
+
+    class FakeTicker:
+        def __init__(self, ticker):
+            self.ticker = ticker
+            self.market = FakeMarket()
+
+        def trades(self, *, latest, native):
+            assert self.ticker == "SBER6L26000BA5"
+            assert latest is False
+            assert native is True
+            return [{"tradetime": "14:20:00", "price": 210, "quantity": 5}]
+
+    provider = MoexProvider(api_key=None, ticker_factory=FakeTicker, session_module=FakeSession)
+
+    quote = asyncio.run(provider.option_quote("sber6l26000ba5"))
+    trades = asyncio.run(provider.option_trades("sber6l26000ba5"))
+
+    assert quote["last"] == 210
+    assert trades == [{"tradetime": "14:20:00", "price": 210, "quantity": 5}]
+
+
 def test_moex_provider_quote_prefers_marketdata_snapshot():
     class FakeSession:
         TOKEN = None

@@ -54,6 +54,63 @@ class FakeProvider:
             {"tradedate": "2026-06-18", "tradetime": "10:00:00", "clgroup": "jur", "pos_long": 80, "pos_short": 120},
         ]
 
+    async def options_chain(self, underlying):
+        self.calls.append(("options_chain", underlying))
+        return [
+            {
+                "secid": "SBER6L26000BA5",
+                "assetcode": "SBER",
+                "optiontype": "call",
+                "strike": 26000,
+                "lasttradedate": "2026-06-18",
+                "last": 210,
+                "bid": 205,
+                "offer": 215,
+                "voltoday": 1200,
+                "valtoday": 25_200_000,
+                "openposition": 3400,
+            },
+            {
+                "secid": "SBER6R24000BA5",
+                "assetcode": "SBER",
+                "optiontype": "put",
+                "strike": 24000,
+                "lasttradedate": "2026-06-18",
+                "last": 130,
+                "bid": 125,
+                "offer": 135,
+                "voltoday": 900,
+                "valtoday": 11_700_000,
+                "openposition": 2800,
+            },
+            {
+                "secid": "GAZR6L12000BA5",
+                "assetcode": "GAZP",
+                "optiontype": "call",
+                "strike": 12000,
+                "voltoday": 5000,
+                "valtoday": 90_000_000,
+            },
+        ]
+
+    async def option_quote(self, ticker):
+        self.calls.append(("option_quote", ticker))
+        return {
+            "ticker": ticker,
+            "last": 210,
+            "bid": 205,
+            "offer": 215,
+            "last_to_prev_pct": 4.2,
+            "time": "14:20:00",
+        }
+
+    async def option_trades(self, ticker):
+        self.calls.append(("option_trades", ticker))
+        return [
+            {"tradetime": "14:15:00", "price": 208, "quantity": 10, "value": 208_000},
+            {"tradetime": "14:20:00", "price": 210, "quantity": 5, "value": 105_000},
+        ]
+
 
 def test_parse_command_defaults_to_russian_help_for_unknown_text():
     assert parse_command("/flow rosn 7") == Command(name="flow", ticker="ROSN", days=7)
@@ -62,6 +119,8 @@ def test_parse_command_defaults_to_russian_help_for_unknown_text():
     assert parse_command("/watch rosn 5m").minutes == 5
     assert parse_command("/heatmap rosn sber").tickers == ("ROSN", "SBER")
     assert parse_command("/marketflow rosn sber").tickers == ("ROSN", "SBER")
+    assert parse_command("/optionflow sber").ticker == "SBER"
+    assert parse_command("/option sber6l26000ba5").ticker == "SBER6L26000BA5"
     assert parse_command("/score 75").args == ("75",)
     assert parse_command("/stats rosn").days == 30
     assert parse_command("что делать") == Command(name="help", ticker=None, days=1)
@@ -95,6 +154,37 @@ def test_handle_help_command_is_russian():
     assert "Портфель" in text
     assert "не является инвестиционной рекомендацией" in text
     assert "русском" in text
+
+
+def test_handle_optionflow_command_returns_options_activity_not_buy_sell_flow():
+    provider = FakeProvider()
+
+    text = asyncio.run(handle_command("/optionflow sber", provider))
+
+    assert "Опционная активность SBER" in text
+    assert "SBER6L26000BA5" in text
+    assert "SBER6R24000BA5" in text
+    assert "Call: 1" in text
+    assert "Put: 1" in text
+    assert "не ALGOPACK buy/sell flow" in text
+    assert "GAZR6L12000BA5" not in text
+    assert ("options_chain", "SBER") in provider.calls
+
+
+def test_handle_option_command_returns_contract_snapshot_and_raw_trades():
+    provider = FakeProvider()
+
+    text = asyncio.run(handle_command("/option sber6l26000ba5", provider))
+
+    assert "Опцион SBER6L26000BA5" in text
+    assert "Last: 210.00" in text
+    assert "Спрос/предложение: 205.00 / 215.00" in text
+    assert "Сделок: 2" in text
+    assert "Оборот: 0.3 млн ₽" in text
+    assert "Последняя сделка: 14:20:00 210.00 x 5" in text
+    assert "не подтверждает сторону покупателя/продавца" in text
+    assert ("option_quote", "SBER6L26000BA5") in provider.calls
+    assert ("option_trades", "SBER6L26000BA5") in provider.calls
 
 
 def test_handle_marketflow_command_shows_last_two_hour_buy_sell_leaders():

@@ -54,6 +54,14 @@ COMMAND_SPECS: tuple[CommandSpec, ...] = (
     ),
     CommandSpec("digest", "/digest ROSN SBER", "краткий дайджест главных сигналов", "Scanner Pro и рынок"),
     CommandSpec("stats", "/stats ROSN 30", "статистика похожих состояний на истории TradeStats", "Scanner Pro и рынок"),
+    CommandSpec(
+        "optionflow",
+        "/optionflow SBER",
+        "активность опционов по объему/обороту без ALGOPACK buy/sell flow",
+        "Опционы",
+    ),
+    CommandSpec("options", "/options SBER", "алиас для /optionflow", "Опционы"),
+    CommandSpec("option", "/option SR100CC0", "снимок и raw trades по опционному контракту", "Опционы"),
     CommandSpec("watch", "/watch ROSN 15m", "добавить тикер в автосканер", "Автосканер watchlist"),
     CommandSpec("unwatch", "/unwatch ROSN", "удалить тикер из автосканера", "Автосканер watchlist"),
     CommandSpec("watchlist", "/watchlist", "показать автосканер", "Автосканер watchlist"),
@@ -74,7 +82,15 @@ KNOWN_COMMANDS = {spec.name for spec in COMMAND_SPECS} | {"help"}
 NO_TICKER_COMMANDS = {"watchlist", "settings", "portfolio", "portfolio_risk"}
 ARG_COMMANDS = {"score", "quiet", "types"}
 MULTI_TICKER_COMMANDS = {"scan", "heatmap", "mega", "digest", "marketflow"}
-ONE_TICKER_COMMANDS = {"portfolio_add", "portfolio_remove", "futoi", "channel_signal"}
+ONE_TICKER_COMMANDS = {
+    "portfolio_add",
+    "portfolio_remove",
+    "futoi",
+    "channel_signal",
+    "optionflow",
+    "options",
+    "option",
+}
 
 
 def parse_command(text: str) -> Command:
