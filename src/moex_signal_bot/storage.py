@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import datetime as dt
-import sqlite3
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from pathlib import Path
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -36,11 +36,12 @@ ALLOWED_ALERT_TYPES = (
 )
 
 
-class WatchlistStore:
-    def __init__(self, path: str | Path) -> None:
-        self.path = str(path)
-        self._conn = sqlite3.connect(self.path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
+class PostgresWatchlistStore:
+    def __init__(self, database_url: str, *, connect: Callable[[str], Any] | None = None) -> None:
+        if not database_url:
+            raise RuntimeError("Не задана переменная окружения DATABASE_URL для PostgreSQL.")
+        self.database_url = database_url
+        self._conn = connect(database_url) if connect else _connect_postgres(database_url)
         self._create_schema()
 
     def close(self) -> None:
@@ -57,23 +58,21 @@ class WatchlistStore:
         now = _normalize_datetime(now)
         ticker = ticker.upper()
         interval_minutes = max(1, min(1440, int(interval_minutes)))
-        with self._conn:
-            self._conn.execute(
-                """
-                INSERT INTO watchlist(chat_id, ticker, interval_minutes, created_at)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(chat_id, ticker)
-                DO UPDATE SET interval_minutes = excluded.interval_minutes
-                """,
-                (chat_id, ticker, interval_minutes, _dump_datetime(now)),
-            )
+        self._write(
+            """
+            INSERT INTO watchlist(chat_id, ticker, interval_minutes, created_at)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT(chat_id, ticker)
+            DO UPDATE SET interval_minutes = EXCLUDED.interval_minutes
+            """,
+            (chat_id, ticker, interval_minutes, _dump_datetime(now)),
+        )
 
     def remove_watch(self, chat_id: int, ticker: str) -> bool:
-        with self._conn:
-            cursor = self._conn.execute(
-                "DELETE FROM watchlist WHERE chat_id = ? AND ticker = ?",
-                (chat_id, ticker.upper()),
-            )
+        cursor = self._write(
+            "DELETE FROM watchlist WHERE chat_id = %s AND ticker = %s",
+            (chat_id, ticker.upper()),
+        )
         return cursor.rowcount > 0
 
     def list_watch(self, chat_id: int) -> list[WatchItem]:
@@ -81,7 +80,7 @@ class WatchlistStore:
             """
             SELECT chat_id, ticker, interval_minutes, muted_until, created_at, last_checked_at
             FROM watchlist
-            WHERE chat_id = ?
+            WHERE chat_id = %s
             ORDER BY ticker
             """,
             (chat_id,),
@@ -102,15 +101,14 @@ class WatchlistStore:
 
     def mute(self, chat_id: int, ticker: str, muted_until: dt.datetime) -> None:
         muted_until = _normalize_datetime(muted_until)
-        with self._conn:
-            self._conn.execute(
-                """
-                UPDATE watchlist
-                SET muted_until = ?
-                WHERE chat_id = ? AND ticker = ?
-                """,
-                (_dump_datetime(muted_until), chat_id, ticker.upper()),
-            )
+        self._write(
+            """
+            UPDATE watchlist
+            SET muted_until = %s
+            WHERE chat_id = %s AND ticker = %s
+            """,
+            (_dump_datetime(muted_until), chat_id, ticker.upper()),
+        )
 
     def is_muted(self, item: WatchItem, now: dt.datetime | None = None) -> bool:
         now = _normalize_datetime(now)
@@ -118,22 +116,21 @@ class WatchlistStore:
 
     def mark_checked(self, chat_id: int, ticker: str, now: dt.datetime | None = None) -> None:
         now = _normalize_datetime(now)
-        with self._conn:
-            self._conn.execute(
-                """
-                UPDATE watchlist
-                SET last_checked_at = ?
-                WHERE chat_id = ? AND ticker = ?
-                """,
-                (_dump_datetime(now), chat_id, ticker.upper()),
-            )
+        self._write(
+            """
+            UPDATE watchlist
+            SET last_checked_at = %s
+            WHERE chat_id = %s AND ticker = %s
+            """,
+            (_dump_datetime(now), chat_id, ticker.upper()),
+        )
 
     def was_signal_sent(self, chat_id: int, ticker: str, signal_code: str, signal_key: str) -> bool:
         row = self._conn.execute(
             """
             SELECT 1
             FROM sent_signals
-            WHERE chat_id = ? AND ticker = ? AND signal_code = ? AND signal_key = ?
+            WHERE chat_id = %s AND ticker = %s AND signal_code = %s AND signal_key = %s
             """,
             (chat_id, ticker.upper(), signal_code, signal_key),
         ).fetchone()
@@ -148,21 +145,21 @@ class WatchlistStore:
         sent_at: dt.datetime | None = None,
     ) -> None:
         sent_at = _normalize_datetime(sent_at)
-        with self._conn:
-            self._conn.execute(
-                """
-                INSERT OR IGNORE INTO sent_signals(chat_id, ticker, signal_code, signal_key, sent_at)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (chat_id, ticker.upper(), signal_code, signal_key, _dump_datetime(sent_at)),
-            )
+        self._write(
+            """
+            INSERT INTO sent_signals(chat_id, ticker, signal_code, signal_key, sent_at)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT(chat_id, ticker, signal_code, signal_key) DO NOTHING
+            """,
+            (chat_id, ticker.upper(), signal_code, signal_key, _dump_datetime(sent_at)),
+        )
 
     def get_settings(self, chat_id: int) -> ChatSettings:
         row = self._conn.execute(
             """
             SELECT chat_id, min_score, quiet_start, quiet_end, alert_types
             FROM chat_settings
-            WHERE chat_id = ?
+            WHERE chat_id = %s
             """,
             (chat_id,),
         ).fetchone()
@@ -179,79 +176,75 @@ class WatchlistStore:
     def set_min_score(self, chat_id: int, min_score: int) -> None:
         min_score = max(0, min(100, int(min_score)))
         settings = self.get_settings(chat_id)
-        with self._conn:
-            self._conn.execute(
-                """
-                INSERT INTO chat_settings(chat_id, min_score, quiet_start, quiet_end, alert_types)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(chat_id)
-                DO UPDATE SET min_score = excluded.min_score
-                """,
-                (
-                    chat_id,
-                    min_score,
-                    settings.quiet_start,
-                    settings.quiet_end,
-                    _dump_alert_types(settings.alert_types),
-                ),
-            )
+        self._write(
+            """
+            INSERT INTO chat_settings(chat_id, min_score, quiet_start, quiet_end, alert_types)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT(chat_id)
+            DO UPDATE SET min_score = EXCLUDED.min_score
+            """,
+            (
+                chat_id,
+                min_score,
+                settings.quiet_start,
+                settings.quiet_end,
+                _dump_alert_types(settings.alert_types),
+            ),
+        )
 
     def set_quiet_hours(self, chat_id: int, quiet_start: str | None, quiet_end: str | None) -> None:
         quiet_start = _normalize_time_value(quiet_start) if quiet_start else None
         quiet_end = _normalize_time_value(quiet_end) if quiet_end else None
         settings = self.get_settings(chat_id)
-        with self._conn:
-            self._conn.execute(
-                """
-                INSERT INTO chat_settings(chat_id, min_score, quiet_start, quiet_end, alert_types)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(chat_id)
-                DO UPDATE SET quiet_start = excluded.quiet_start,
-                              quiet_end = excluded.quiet_end
-                """,
-                (
-                    chat_id,
-                    settings.min_score,
-                    quiet_start,
-                    quiet_end,
-                    _dump_alert_types(settings.alert_types),
-                ),
-            )
+        self._write(
+            """
+            INSERT INTO chat_settings(chat_id, min_score, quiet_start, quiet_end, alert_types)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT(chat_id)
+            DO UPDATE SET quiet_start = EXCLUDED.quiet_start,
+                          quiet_end = EXCLUDED.quiet_end
+            """,
+            (
+                chat_id,
+                settings.min_score,
+                quiet_start,
+                quiet_end,
+                _dump_alert_types(settings.alert_types),
+            ),
+        )
 
     def set_alert_types(self, chat_id: int, alert_types: tuple[str, ...]) -> None:
         normalized = _normalize_alert_types(alert_types)
         settings = self.get_settings(chat_id)
-        with self._conn:
-            self._conn.execute(
-                """
-                INSERT INTO chat_settings(chat_id, min_score, quiet_start, quiet_end, alert_types)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(chat_id)
-                DO UPDATE SET alert_types = excluded.alert_types
-                """,
-                (chat_id, settings.min_score, settings.quiet_start, settings.quiet_end, _dump_alert_types(normalized)),
-            )
+        self._write(
+            """
+            INSERT INTO chat_settings(chat_id, min_score, quiet_start, quiet_end, alert_types)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT(chat_id)
+            DO UPDATE SET alert_types = EXCLUDED.alert_types
+            """,
+            (chat_id, settings.min_score, settings.quiet_start, settings.quiet_end, _dump_alert_types(normalized)),
+        )
 
     def add_portfolio_ticker(self, chat_id: int, ticker: str, *, now: dt.datetime | None = None) -> None:
         now = _normalize_datetime(now)
-        with self._conn:
-            self._conn.execute(
-                """
-                INSERT OR IGNORE INTO portfolio(chat_id, ticker, created_at)
-                VALUES (?, ?, ?)
-                """,
-                (chat_id, ticker.upper(), _dump_datetime(now)),
-            )
+        self._write(
+            """
+            INSERT INTO portfolio(chat_id, ticker, created_at)
+            VALUES (%s, %s, %s)
+            ON CONFLICT(chat_id, ticker) DO NOTHING
+            """,
+            (chat_id, ticker.upper(), _dump_datetime(now)),
+        )
 
     def remove_portfolio_ticker(self, chat_id: int, ticker: str) -> bool:
-        with self._conn:
-            cursor = self._conn.execute(
-                """
-                DELETE FROM portfolio
-                WHERE chat_id = ? AND ticker = ?
-                """,
-                (chat_id, ticker.upper()),
-            )
+        cursor = self._write(
+            """
+            DELETE FROM portfolio
+            WHERE chat_id = %s AND ticker = %s
+            """,
+            (chat_id, ticker.upper()),
+        )
         return cursor.rowcount > 0
 
     def list_portfolio(self, chat_id: int) -> list[str]:
@@ -259,64 +252,81 @@ class WatchlistStore:
             """
             SELECT ticker
             FROM portfolio
-            WHERE chat_id = ?
+            WHERE chat_id = %s
             ORDER BY created_at, ticker
             """,
             (chat_id,),
         ).fetchall()
         return [str(row["ticker"]) for row in rows]
 
+    def _write(self, sql: str, params: tuple[Any, ...]) -> Any:
+        cursor = self._conn.execute(sql, params)
+        self._conn.commit()
+        return cursor
+
     def _create_schema(self) -> None:
-        with self._conn:
-            self._conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS watchlist (
-                    chat_id INTEGER NOT NULL,
-                    ticker TEXT NOT NULL,
-                    interval_minutes INTEGER NOT NULL,
-                    muted_until TEXT,
-                    created_at TEXT NOT NULL,
-                    last_checked_at TEXT,
-                    PRIMARY KEY(chat_id, ticker)
-                )
-                """
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS watchlist (
+                chat_id BIGINT NOT NULL,
+                ticker TEXT NOT NULL,
+                interval_minutes INTEGER NOT NULL,
+                muted_until TIMESTAMPTZ,
+                created_at TIMESTAMPTZ NOT NULL,
+                last_checked_at TIMESTAMPTZ,
+                PRIMARY KEY(chat_id, ticker)
             )
-            self._conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS chat_settings (
-                    chat_id INTEGER PRIMARY KEY,
-                    min_score INTEGER NOT NULL DEFAULT 60,
-                    quiet_start TEXT,
-                    quiet_end TEXT,
-                    alert_types TEXT NOT NULL DEFAULT ''
-                )
-                """
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS chat_settings (
+                chat_id BIGINT PRIMARY KEY,
+                min_score INTEGER NOT NULL DEFAULT 60,
+                quiet_start TEXT,
+                quiet_end TEXT,
+                alert_types TEXT NOT NULL DEFAULT ''
             )
-            self._conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS portfolio (
-                    chat_id INTEGER NOT NULL,
-                    ticker TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    PRIMARY KEY(chat_id, ticker)
-                )
-                """
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS portfolio (
+                chat_id BIGINT NOT NULL,
+                ticker TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL,
+                PRIMARY KEY(chat_id, ticker)
             )
-            self._conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS sent_signals (
-                    chat_id INTEGER NOT NULL,
-                    ticker TEXT NOT NULL,
-                    signal_code TEXT NOT NULL,
-                    signal_key TEXT NOT NULL,
-                    sent_at TEXT NOT NULL,
-                    PRIMARY KEY(chat_id, ticker, signal_code, signal_key)
-                )
-                """
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sent_signals (
+                chat_id BIGINT NOT NULL,
+                ticker TEXT NOT NULL,
+                signal_code TEXT NOT NULL,
+                signal_key TEXT NOT NULL,
+                sent_at TIMESTAMPTZ NOT NULL,
+                PRIMARY KEY(chat_id, ticker, signal_code, signal_key)
             )
+            """
+        )
+        self._conn.commit()
 
 
-def _watch_item(row: sqlite3.Row) -> WatchItem:
+WatchlistStore = PostgresWatchlistStore
+
+
+def _connect_postgres(database_url: str) -> Any:
+    try:
+        import psycopg
+        from psycopg.rows import dict_row
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("Не установлен PostgreSQL-драйвер psycopg. Выполните pip install -e .") from exc
+    return psycopg.connect(database_url, row_factory=dict_row)
+
+
+def _watch_item(row: Mapping[str, Any]) -> WatchItem:
     return WatchItem(
         chat_id=int(row["chat_id"]),
         ticker=str(row["ticker"]),
@@ -341,14 +351,14 @@ def _normalize_datetime(value: dt.datetime | None) -> dt.datetime:
     return value.astimezone(dt.UTC)
 
 
-def _dump_datetime(value: dt.datetime) -> str:
-    return _normalize_datetime(value).isoformat(timespec="seconds")
+def _dump_datetime(value: dt.datetime) -> dt.datetime:
+    return _normalize_datetime(value)
 
 
-def _load_datetime(value: str | None) -> dt.datetime | None:
+def _load_datetime(value: dt.datetime | str | None) -> dt.datetime | None:
     if not value:
         return None
-    parsed = dt.datetime.fromisoformat(value)
+    parsed = dt.datetime.fromisoformat(value) if isinstance(value, str) else value
     return _normalize_datetime(parsed)
 
 

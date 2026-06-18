@@ -2,7 +2,7 @@ import asyncio
 import datetime as dt
 
 from moex_signal_bot.bot import Command, handle_command, parse_command
-from moex_signal_bot.storage import WatchlistStore
+from moex_signal_bot.memory_storage import InMemoryWatchlistStore as WatchlistStore
 
 
 class FakeProvider:
@@ -95,7 +95,7 @@ def test_handle_help_command_is_russian():
 
 
 def test_handle_watchlist_commands_are_russian_and_persistent(tmp_path):
-    store = WatchlistStore(tmp_path / "signals.sqlite3")
+    store = WatchlistStore()
 
     added = asyncio.run(handle_command("/watch rosn 5m", FakeProvider(), store=store, chat_id=123))
     listed = asyncio.run(handle_command("/watchlist", FakeProvider(), store=store, chat_id=123))
@@ -117,7 +117,7 @@ def test_handle_watchlist_commands_are_russian_and_persistent(tmp_path):
 
 
 def test_handle_signal_scan_and_full_commands_return_russian_reports(tmp_path):
-    store = WatchlistStore(tmp_path / "signals.sqlite3")
+    store = WatchlistStore()
 
     signal = asyncio.run(handle_command("/signal rosn", FakeProvider(), store=store, chat_id=123))
     scan = asyncio.run(handle_command("/scan rosn sber", FakeProvider(), store=store, chat_id=123))
@@ -131,7 +131,7 @@ def test_handle_signal_scan_and_full_commands_return_russian_reports(tmp_path):
 
 
 def test_handle_settings_commands_update_watchlist_pro_preferences(tmp_path):
-    store = WatchlistStore(tmp_path / "signals.sqlite3")
+    store = WatchlistStore()
 
     score = asyncio.run(handle_command("/score 75", FakeProvider(), store=store, chat_id=123))
     quiet = asyncio.run(handle_command("/quiet 23:00 07:00", FakeProvider(), store=store, chat_id=123))
@@ -147,7 +147,7 @@ def test_handle_settings_commands_update_watchlist_pro_preferences(tmp_path):
 
 
 def test_handle_settings_commands_validate_inputs_in_russian(tmp_path):
-    store = WatchlistStore(tmp_path / "signals.sqlite3")
+    store = WatchlistStore()
 
     quiet = asyncio.run(handle_command("/quiet 25:99 07:00", FakeProvider(), store=store, chat_id=123))
     types = asyncio.run(handle_command("/types typo", FakeProvider(), store=store, chat_id=123))
@@ -157,7 +157,7 @@ def test_handle_settings_commands_validate_inputs_in_russian(tmp_path):
 
 
 def test_handle_heatmap_mega_digest_futoi_stats_and_channel_commands_are_russian(tmp_path):
-    store = WatchlistStore(tmp_path / "signals.sqlite3")
+    store = WatchlistStore()
     provider = FakeProvider()
 
     heatmap = asyncio.run(
@@ -182,7 +182,7 @@ def test_handle_heatmap_mega_digest_futoi_stats_and_channel_commands_are_russian
 
 
 def test_handle_portfolio_commands_persist_and_report_risk(tmp_path):
-    store = WatchlistStore(tmp_path / "signals.sqlite3")
+    store = WatchlistStore()
     provider = FakeProvider()
 
     added = asyncio.run(handle_command("/portfolio_add rosn", provider, store=store, chat_id=123))
@@ -200,7 +200,7 @@ def test_handle_portfolio_commands_persist_and_report_risk(tmp_path):
 
 
 def test_handle_portfolio_risk_uses_chat_score_threshold(tmp_path):
-    store = WatchlistStore(tmp_path / "signals.sqlite3")
+    store = WatchlistStore()
     provider = FakeProvider()
     asyncio.run(handle_command("/portfolio_add rosn", provider, store=store, chat_id=123))
     asyncio.run(handle_command("/score 100", provider, store=store, chat_id=123))

@@ -6,7 +6,7 @@ Expand the Russian Telegram bot from a single-stock signal helper into a practic
 
 ## Product Scope
 
-The first implementation pass ships command-driven MVPs for all approved business ideas while preserving the existing polling bot and SQLite storage model. Automatic sends remain conservative: only watchlist scanner messages are sent without a direct user command, and they continue to use score thresholds, mutes, and deduplication.
+The first implementation pass ships command-driven MVPs for all approved business ideas while preserving the existing polling bot and persistent storage model. Automatic sends remain conservative: only watchlist scanner messages are sent without a direct user command, and they continue to use score thresholds, mutes, and deduplication.
 
 ## Features
 
@@ -22,11 +22,11 @@ The first implementation pass ships command-driven MVPs for all approved busines
 
 ## Architecture
 
-Keep `bot.py` as the command router and move new calculations into focused modules. `analytics.py` owns reusable ranking/statistics helpers. `futoi.py` owns futures open-interest summaries. `portfolio.py` owns portfolio risk aggregation. `storage.py` remains the single SQLite boundary for per-user state. `formatters.py` remains the Russian presentation layer.
+Keep `bot.py` as the command router and move new calculations into focused modules. `analytics.py` owns reusable ranking/statistics helpers. `futoi.py` owns futures open-interest summaries. `portfolio.py` owns portfolio risk aggregation. `storage.py` remains the PostgreSQL boundary for per-user state. `formatters.py` remains the Russian presentation layer.
 
 ## Data Sources
 
-The implementation uses the existing `MoexProvider` for TradeStats, OrderStats, OBStats, MegaAlert, and quote data. It extends the provider with `futoi(ticker, start, end)` and keeps APIM tokens in environment variables only. No tokens, chat data, or SQLite databases are committed.
+The implementation uses the existing `MoexProvider` for TradeStats, OrderStats, OBStats, MegaAlert, and quote data. It extends the provider with `futoi(ticker, start, end)` and keeps APIM tokens in environment variables only. No tokens, chat data, or PostgreSQL dumps are committed.
 
 ## Commands
 
@@ -45,7 +45,7 @@ Unavailable datasets are reported clearly in Russian. Commands clamp user-provid
 
 ## Testing
 
-Tests cover command parsing, formatter output, SQLite migrations, scanner setting filters, heatmap ranking, MegaAlert summaries, FUTOI aggregation, portfolio risk aggregation, and stats classification. Verification remains:
+Tests cover command parsing, formatter output, storage behavior, scanner setting filters, heatmap ranking, MegaAlert summaries, FUTOI aggregation, portfolio risk aggregation, and stats classification. Verification remains:
 
 ```bash
 python3 -m pytest -q

@@ -1,10 +1,10 @@
 import datetime as dt
 
-from moex_signal_bot.storage import WatchlistStore
+from moex_signal_bot.memory_storage import InMemoryWatchlistStore as WatchlistStore
 
 
 def test_watchlist_store_adds_lists_mutes_and_removes_tickers(tmp_path):
-    store = WatchlistStore(tmp_path / "signals.sqlite3")
+    store = WatchlistStore()
     now = dt.datetime(2026, 6, 18, 10, 0, tzinfo=dt.UTC)
 
     store.add_watch(123, "rosn", interval_minutes=5, now=now)
@@ -34,7 +34,7 @@ def test_watchlist_store_adds_lists_mutes_and_removes_tickers(tmp_path):
 
 
 def test_watchlist_store_dedupes_sent_signals(tmp_path):
-    store = WatchlistStore(tmp_path / "signals.sqlite3")
+    store = WatchlistStore()
     now = dt.datetime(2026, 6, 18, 11, 0, tzinfo=dt.UTC)
 
     assert store.was_signal_sent(123, "rosn", "sell_pressure", "2026-06-18T11:00") is False
@@ -46,7 +46,7 @@ def test_watchlist_store_dedupes_sent_signals(tmp_path):
 
 
 def test_store_persists_chat_settings(tmp_path):
-    store = WatchlistStore(tmp_path / "signals.sqlite3")
+    store = WatchlistStore()
     try:
         store.set_min_score(42, 75)
         store.set_quiet_hours(42, "23:00", "07:00")
@@ -63,7 +63,7 @@ def test_store_persists_chat_settings(tmp_path):
 
 
 def test_store_persists_portfolio(tmp_path):
-    store = WatchlistStore(tmp_path / "signals.sqlite3")
+    store = WatchlistStore()
     try:
         store.add_portfolio_ticker(42, "rosn")
         store.add_portfolio_ticker(42, "SBER")

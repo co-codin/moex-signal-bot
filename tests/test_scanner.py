@@ -1,8 +1,8 @@
 import asyncio
 import datetime as dt
 
+from moex_signal_bot.memory_storage import InMemoryWatchlistStore as WatchlistStore
 from moex_signal_bot.scanner import build_signal_report, run_scan_once, scan_tickers
-from moex_signal_bot.storage import WatchlistStore
 
 SELLING_TRADESTATS = [
     {
@@ -113,7 +113,7 @@ def test_scan_tickers_returns_actionable_reports():
 
 def test_run_scan_once_sends_due_actionable_signals_once(tmp_path):
     now = dt.datetime(2026, 6, 18, 11, 0, tzinfo=dt.UTC)
-    store = WatchlistStore(tmp_path / "signals.sqlite3")
+    store = WatchlistStore()
     store.add_watch(123, "rosn", interval_minutes=5, now=now)
     telegram = FakeTelegram()
 
@@ -131,7 +131,7 @@ def test_run_scan_once_sends_due_actionable_signals_once(tmp_path):
 
 def test_run_scan_once_respects_chat_min_score(tmp_path):
     now = dt.datetime(2026, 6, 18, 11, 0, tzinfo=dt.UTC)
-    store = WatchlistStore(tmp_path / "signals.sqlite3")
+    store = WatchlistStore()
     store.add_watch(123, "rosn", interval_minutes=5, now=now)
     store.set_min_score(123, 100)
     telegram = FakeTelegram()
@@ -144,7 +144,7 @@ def test_run_scan_once_respects_chat_min_score(tmp_path):
 
 def test_run_scan_once_respects_alert_type_filter(tmp_path):
     now = dt.datetime(2026, 6, 18, 11, 0, tzinfo=dt.UTC)
-    store = WatchlistStore(tmp_path / "signals.sqlite3")
+    store = WatchlistStore()
     store.add_watch(123, "rosn", interval_minutes=5, now=now)
     store.set_alert_types(123, ("absorption",))
     telegram = FakeTelegram()
@@ -157,7 +157,7 @@ def test_run_scan_once_respects_alert_type_filter(tmp_path):
 
 def test_run_scan_once_skips_provider_calls_for_muted_items(tmp_path):
     now = dt.datetime(2026, 6, 18, 11, 0, tzinfo=dt.UTC)
-    store = WatchlistStore(tmp_path / "signals.sqlite3")
+    store = WatchlistStore()
     store.add_watch(123, "rosn", interval_minutes=5, now=now)
     store.mute(123, "rosn", now + dt.timedelta(minutes=60))
     provider = FakeProvider()
@@ -172,7 +172,7 @@ def test_run_scan_once_skips_provider_calls_for_muted_items(tmp_path):
 
 def test_run_scan_once_respects_quiet_hours(tmp_path):
     now = dt.datetime(2026, 6, 18, 21, 15, tzinfo=dt.UTC)
-    store = WatchlistStore(tmp_path / "signals.sqlite3")
+    store = WatchlistStore()
     store.add_watch(123, "rosn", interval_minutes=5, now=now)
     store.set_quiet_hours(123, "21:00", "07:00")
     provider = FakeProvider()

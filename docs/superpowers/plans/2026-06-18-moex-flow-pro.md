@@ -4,9 +4,9 @@
 
 **Goal:** Add command-driven MVPs for Scanner Pro, Watchlist Pro, FUTOI, heatmap, stats, portfolio risk, MegaAlert feed, digest, and channel export.
 
-**Architecture:** Keep Telegram polling and current provider abstractions. Add focused analytics modules and extend SQLite storage for user settings and portfolio tickers. Keep all user-visible bot output in Russian.
+**Architecture:** Keep Telegram polling and current provider abstractions. Add focused analytics modules and extend persistent storage for user settings and portfolio tickers. Keep all user-visible bot output in Russian.
 
-**Tech Stack:** Python 3.12, `moexalgo`, `httpx`, SQLite, pytest, Ruff.
+**Tech Stack:** Python 3.12, `moexalgo`, `httpx`, PostgreSQL, pytest, Ruff.
 
 ---
 
@@ -34,7 +34,7 @@
 
 ```python
 def test_store_persists_chat_settings(tmp_path):
-    store = WatchlistStore(tmp_path / "signals.sqlite3")
+    store = InMemoryWatchlistStore()
     try:
         store.set_min_score(42, 75)
         store.set_quiet_hours(42, "23:00", "07:00")
@@ -49,7 +49,7 @@ def test_store_persists_chat_settings(tmp_path):
 
 
 def test_store_persists_portfolio(tmp_path):
-    store = WatchlistStore(tmp_path / "signals.sqlite3")
+    store = InMemoryWatchlistStore()
     try:
         store.add_portfolio_ticker(42, "rosn")
         store.add_portfolio_ticker(42, "SBER")

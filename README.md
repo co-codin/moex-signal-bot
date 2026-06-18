@@ -2,7 +2,7 @@
 
 Русскоязычный Telegram-бот для анализа российских акций на MOEX по данным `moexalgo` и ALGOPACK.
 
-Бот показывает котировки, покупательную и продавцовую силу, состояние стакана, давление заявок, события MegaAlert и скоринговые торговые сигналы. Также есть MOEX Flow Pro: автоматический Scanner Pro, расширенные настройки watchlist, FUTOI по фьючерсам, тепловая карта, портфельный риск, дайджест, простая статистика похожих состояний и короткий формат сигнала для Telegram-каналов.
+Бот показывает котировки, покупательную и продавцовую силу, состояние стакана, давление заявок, события MegaAlert и скоринговые торговые сигналы. Также есть MOEX Flow Pro: автоматический Scanner Pro через Redis-очередь и worker-процессы, расширенные настройки watchlist, FUTOI по фьючерсам, тепловая карта, портфельный риск, дайджест, простая статистика похожих состояний и короткий формат сигнала для Telegram-каналов.
 
 Сигналы являются аналитикой по данным, а не инвестиционной рекомендацией.
 
@@ -14,7 +14,8 @@
 - Анализ `OBStats`: дисбаланс стакана и BBO.
 - Анализ `MegaAlert`: аномальные события ALGOPACK.
 - Скоринговые сигналы по нескольким источникам данных.
-- Watchlist и автоматический сканер с хранением в SQLite.
+- Watchlist и автоматический сканер с хранением в PostgreSQL.
+- Redis-очередь для фонового автосканера и горизонтального масштабирования scanner workers.
 - Настройки автосканера: минимальный score, тихие часы и фильтр типов сигналов.
 - Тепловая карта по тикерам и краткий рыночный дайджест.
 - FUTOI по фьючерсам MOEX.
@@ -90,6 +91,12 @@ imbalance = (val_b - val_s) / (val_b + val_s)
 - дисбаланс BBO в стакане;
 - события MegaAlert по новым минимумам или максимумам.
 
+Автосканер работает в три шага:
+
+1. `bot` принимает Telegram-команды и пишет watchlist/settings в PostgreSQL.
+2. `scanner-scheduler` регулярно ищет due watchlist items и ставит задачи в Redis.
+3. Один или несколько `scanner-worker` процессов берут задачи из Redis, читают MOEX/ALGOPACK, проверяют дедупликацию в PostgreSQL и отправляют Telegram-сигналы.
+
 Автосканер отправляет сообщение только если:
 
 - тикер есть в watchlist пользователя;
@@ -117,8 +124,16 @@ imbalance = (val_b - val_s) / (val_b + val_s)
 ```bash
 TELEGRAM_BOT_TOKEN=
 MOEX_API_KEY=
-MOEX_SIGNAL_DB=signals.sqlite3
+POSTGRES_DB=moex_signal_bot
+POSTGRES_USER=moex
+POSTGRES_PASSWORD=change-me
+DATABASE_URL=postgresql://moex:change-me@postgres:5432/moex_signal_bot
+REDIS_URL=redis://redis:6379/0
+SCANNER_QUEUE_KEY=moex:scanner:jobs
 SCANNER_INTERVAL_SECONDS=60
+SCANNER_WORKER_POP_TIMEOUT_SECONDS=5
+SCANNER_MAX_ATTEMPTS=3
+SCANNER_RETRY_DELAY_SECONDS=5
 DEFAULT_SCAN_TICKERS=ROSN SBER GAZP LKOH TATN TATNP
 ```
 
@@ -128,11 +143,17 @@ DEFAULT_SCAN_TICKERS=ROSN SBER GAZP LKOH TATN TATNP
 
 - `TELEGRAM_BOT_TOKEN`: токен Telegram-бота.
 - `MOEX_API_KEY`: API-ключ MOEX/ALGOPACK для `moexalgo`.
-- `MOEX_SIGNAL_DB`: путь к SQLite базе watchlist и дедупликации.
-- `SCANNER_INTERVAL_SECONDS`: частота фонового цикла автосканера.
+- `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`: параметры контейнера PostgreSQL в Docker Compose.
+- `DATABASE_URL`: строка подключения PostgreSQL для watchlist, настроек, портфеля и дедупликации.
+- `REDIS_URL`: строка подключения Redis для очереди задач автосканера.
+- `SCANNER_QUEUE_KEY`: имя Redis-очереди для задач автосканера.
+- `SCANNER_INTERVAL_SECONDS`: частота scheduler-цикла автосканера.
+- `SCANNER_WORKER_POP_TIMEOUT_SECONDS`: сколько worker ждет задачу из Redis перед следующим циклом.
+- `SCANNER_MAX_ATTEMPTS`: сколько повторных попыток делать для упавшей задачи.
+- `SCANNER_RETRY_DELAY_SECONDS`: пауза перед повторной постановкой упавшей задачи.
 - `DEFAULT_SCAN_TICKERS`: тикеры для `/heatmap`, `/mega` и `/digest`, если пользователь не указал список.
 
-Не коммитьте реальные токены, JWT, `.env`, SQLite базы и пользовательские данные.
+Не коммитьте реальные токены, JWT, `.env`, дампы PostgreSQL и пользовательские данные.
 
 ## Локальный запуск
 
@@ -140,7 +161,7 @@ DEFAULT_SCAN_TICKERS=ROSN SBER GAZP LKOH TATN TATNP
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -e ".[dev]"
-python -m moex_signal_bot
+DATABASE_URL=postgresql://moex:change-me@localhost:5432/moex_signal_bot python -m moex_signal_bot
 ```
 
 Локальная проверка без Telegram:
@@ -160,21 +181,68 @@ python -m moex_signal_bot --dry-run "/futoi SBERF"
 PYTHONPATH=src:/home/elijah/Desktop/moexalgo python3 -m moex_signal_bot --dry-run "/help"
 ```
 
+## Makefile
+
+Основные команды собраны в `Makefile`:
+
+```bash
+make install
+make test
+make lint
+make check
+make docker-build
+make compose-up
+make workers WORKERS=3
+make compose-logs
+make compose-down
+```
+
+`make check` запускает `pytest`, `ruff check`, `ruff format --check` и `git diff --check`. `make workers WORKERS=3` масштабирует только `scanner-worker`; `bot` и `scanner-scheduler` должны оставаться в одном экземпляре.
+
 ## Docker
 
-Сборка:
+Рекомендуемый запуск через Docker Compose:
+
+```bash
+cp .env.example .env
+# Заполните TELEGRAM_BOT_TOKEN, MOEX_API_KEY и смените POSTGRES_PASSWORD/DATABASE_URL.
+docker compose up -d --build
+```
+
+Проверка логов:
+
+```bash
+docker compose logs -f bot
+docker compose logs -f scanner-scheduler scanner-worker
+```
+
+Масштабирование worker-процессов автосканера:
+
+```bash
+docker compose up -d --scale scanner-worker=3
+```
+
+Остановка:
+
+```bash
+docker compose down
+```
+
+Данные PostgreSQL хранятся в volume `postgres-data`. Redis queue/cache хранится в volume `redis-data`.
+
+Сборка одиночного образа:
 
 ```bash
 docker build -t moex-signal-bot .
 ```
 
-Запуск:
+Запуск одиночного контейнера требует внешний PostgreSQL. Для автоматического сканера также нужны внешний Redis и отдельные процессы scheduler/worker:
 
 ```bash
-docker run --rm --env-file .env -v moex-signal-data:/data moex-signal-bot
+docker run --rm --env-file .env moex-signal-bot
+docker run --rm --env-file .env moex-signal-bot python -m moex_signal_bot --scanner-scheduler
+docker run --rm --env-file .env moex-signal-bot python -m moex_signal_bot --scanner-worker
 ```
-
-В Docker по умолчанию база хранится в `/data/signals.sqlite3`, поэтому volume сохраняет watchlist и историю отправленных сигналов между перезапусками.
 
 Проверка образа без секретов:
 
@@ -205,10 +273,12 @@ src/moex_signal_bot/
   moex_provider.py    # адаптер moexalgo
   signals.py          # базовые модели и классификация
   scanner.py          # скоринг и автоматический сканер
+  scanner_queue.py    # Redis-очередь, scheduler jobs и worker processing
   analytics.py        # heatmap, MegaAlert feed, digest и статистика
   futoi.py            # агрегация открытого интереса FUTOI
   portfolio.py        # риск портфеля
-  storage.py          # SQLite watchlist и дедупликация
+  storage.py          # PostgreSQL watchlist, настройки, портфель и дедупликация
+  memory_storage.py   # in-memory store для тестов и dry-run без DATABASE_URL
   formatters.py       # русские текстовые отчеты
   telegram_client.py  # Telegram Bot API client
   __main__.py         # polling loop и scanner loop
@@ -219,5 +289,8 @@ tests/                # unit и integration-style тесты
 
 - Бот не размещает торговые заявки и не подключается к брокерскому API.
 - Автосигналы являются уведомлениями, а не автоматической торговлей.
+- Запускайте только один экземпляр `bot`: Telegram long polling не рассчитан на несколько polling-реплик.
+- Запускайте только один `scanner-scheduler`, чтобы не ставить дублирующие задачи.
+- `scanner-worker` можно масштабировать через `docker compose up -d --scale scanner-worker=3`.
 - Пользователь сам отвечает за интерпретацию сигналов, риск и размер позиции.
 - Перед расширением в сторону реальной торговли нужны отдельные risk controls, журнал решений, лимиты и ручное подтверждение.

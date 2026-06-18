@@ -5,7 +5,7 @@ This file governs the whole repository.
 ## Project Rules
 
 - Keep all Telegram responses in Russian.
-- Не коммитьте реальные токены, JWT, `.env`, local SQLite databases, or live chat/user data.
+- Не коммитьте реальные токены, JWT, `.env`, database dumps, Redis dumps, or live chat/user data.
 - Treat bot output as analytics, not investment advice. Keep the disclaimer in signal-style responses.
 - Prefer small, test-backed changes in `src/moex_signal_bot`.
 - Preserve direct Telegram Bot API polling unless a task explicitly asks for another framework.

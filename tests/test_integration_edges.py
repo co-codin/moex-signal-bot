@@ -2,7 +2,9 @@ import asyncio
 
 from moex_signal_bot.__main__ import _user_error_message
 from moex_signal_bot.config import load_dotenv_values, require_env
+from moex_signal_bot.memory_storage import InMemoryWatchlistStore
 from moex_signal_bot.moex_provider import MoexProvider
+from moex_signal_bot.storage import WatchlistStore
 from moex_signal_bot.telegram_client import TelegramClient
 
 
@@ -158,3 +160,78 @@ def test_user_error_message_hides_internal_exception_details():
     assert "Bearer token" not in message
     assert "https://example.invalid" not in message
     assert "не удалось выполнить команду" in message
+
+
+def test_production_store_requires_postgres_database_url(monkeypatch):
+    from moex_signal_bot.__main__ import create_store
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    try:
+        create_store()
+    except RuntimeError as exc:
+        assert "DATABASE_URL" in str(exc)
+    else:
+        raise AssertionError("create_store must require DATABASE_URL")
+
+
+def test_dry_run_store_can_use_memory_without_database(monkeypatch):
+    from moex_signal_bot.__main__ import create_store
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    store = create_store(for_dry_run=True)
+
+    assert isinstance(store, InMemoryWatchlistStore)
+
+
+def test_dry_run_help_does_not_require_market_provider(monkeypatch, capsys):
+    from moex_signal_bot import __main__ as cli
+
+    class ExplodingProvider:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("help dry-run must not build market provider")
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(cli, "MoexProvider", ExplodingProvider)
+
+    asyncio.run(cli.dry_run("/help"))
+
+    assert "Команды на русском:" in capsys.readouterr().out
+
+
+def test_watchlist_store_is_postgresql_adapter():
+    assert WatchlistStore.__name__ == "PostgresWatchlistStore"
+
+
+def test_create_scanner_queue_requires_redis_url(monkeypatch):
+    from moex_signal_bot.__main__ import create_scanner_queue
+
+    monkeypatch.delenv("REDIS_URL", raising=False)
+
+    try:
+        create_scanner_queue()
+    except RuntimeError as exc:
+        assert "REDIS_URL" in str(exc)
+    else:
+        raise AssertionError("create_scanner_queue must require REDIS_URL")
+
+
+def test_create_scanner_queue_uses_env_configuration(monkeypatch):
+    from moex_signal_bot import __main__ as cli
+
+    created = {}
+
+    class FakeRedisScannerQueue:
+        def __init__(self, redis_url, *, queue_key):
+            created["redis_url"] = redis_url
+            created["queue_key"] = queue_key
+
+    monkeypatch.setenv("REDIS_URL", "redis://example:6379/1")
+    monkeypatch.setenv("SCANNER_QUEUE_KEY", "custom:scanner")
+    monkeypatch.setattr(cli, "RedisScannerQueue", FakeRedisScannerQueue)
+
+    queue = cli.create_scanner_queue()
+
+    assert isinstance(queue, FakeRedisScannerQueue)
+    assert created == {"redis_url": "redis://example:6379/1", "queue_key": "custom:scanner"}
